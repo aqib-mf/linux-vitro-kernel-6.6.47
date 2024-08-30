@@ -21,7 +21,6 @@
 #include <asm/hw_irq.h>
 #include <asm/desc.h>
 #include <asm/traps.h>
-#include <asm/thermal.h>
 
 #define CREATE_TRACE_POINTS
 #include <asm/trace/irq_vectors.h>
@@ -49,7 +48,7 @@ void ack_bad_irq(unsigned int irq)
 	 * completely.
 	 * But only ack when the APIC is enabled -AK
 	 */
-	apic_eoi();
+	ack_APIC_irq();
 }
 
 #define irq_stats(x)		(&per_cpu(irq_stat, x))
@@ -211,13 +210,6 @@ u64 arch_irq_stat_cpu(unsigned int cpu)
 #ifdef CONFIG_X86_MCE_THRESHOLD
 	sum += irq_stats(cpu)->irq_threshold_count;
 #endif
-#ifdef CONFIG_X86_HV_CALLBACK_VECTOR
-	sum += irq_stats(cpu)->irq_hv_callback_count;
-#endif
-#if IS_ENABLED(CONFIG_HYPERV)
-	sum += irq_stats(cpu)->irq_hv_reenlightenment_count;
-	sum += irq_stats(cpu)->hyperv_stimer0_count;
-#endif
 #ifdef CONFIG_X86_MCE
 	sum += per_cpu(mce_exception_count, cpu);
 	sum += per_cpu(mce_poll_count, cpu);
@@ -235,7 +227,7 @@ static __always_inline void handle_irq(struct irq_desc *desc,
 				       struct pt_regs *regs)
 {
 	if (IS_ENABLED(CONFIG_X86_64))
-		generic_handle_irq_desc(desc);
+		run_irq_on_irqstack_cond(desc->handle_irq, desc, regs);
 	else
 		__handle_irq(desc, regs);
 }
@@ -256,7 +248,7 @@ DEFINE_IDTENTRY_IRQ(common_interrupt)
 	if (likely(!IS_ERR_OR_NULL(desc))) {
 		handle_irq(desc, regs);
 	} else {
-		apic_eoi();
+		ack_APIC_irq();
 
 		if (desc == VECTOR_UNUSED) {
 			pr_emerg_ratelimited("%s: %d.%u No irq handler for vector\n",
@@ -280,7 +272,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_x86_platform_ipi)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 
-	apic_eoi();
+	ack_APIC_irq();
 	trace_x86_platform_ipi_entry(X86_PLATFORM_IPI_VECTOR);
 	inc_irq_stat(x86_platform_ipis);
 	if (x86_platform_ipi_callback)
@@ -310,7 +302,7 @@ EXPORT_SYMBOL_GPL(kvm_set_posted_intr_wakeup_handler);
  */
 DEFINE_IDTENTRY_SYSVEC_SIMPLE(sysvec_kvm_posted_intr_ipi)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	inc_irq_stat(kvm_posted_intr_ipis);
 }
 
@@ -319,7 +311,7 @@ DEFINE_IDTENTRY_SYSVEC_SIMPLE(sysvec_kvm_posted_intr_ipi)
  */
 DEFINE_IDTENTRY_SYSVEC(sysvec_kvm_posted_intr_wakeup_ipi)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	inc_irq_stat(kvm_posted_intr_wakeup_ipis);
 	kvm_posted_intr_wakeup_handler();
 }
@@ -329,7 +321,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_kvm_posted_intr_wakeup_ipi)
  */
 DEFINE_IDTENTRY_SYSVEC_SIMPLE(sysvec_kvm_posted_intr_nested_ipi)
 {
-	apic_eoi();
+	ack_APIC_irq();
 	inc_irq_stat(kvm_posted_intr_nested_ipis);
 }
 #endif
@@ -347,7 +339,7 @@ void fixup_irqs(void)
 	irq_migrate_all_off_this_cpu();
 
 	/*
-	 * We can remove mdelay() and then send spurious interrupts to
+	 * We can remove mdelay() and then send spuriuous interrupts to
 	 * new cpu targets for all the irqs that were handled previously by
 	 * this cpu. While it works, I have seen spurious interrupt messages
 	 * (nothing wrong but still...).
@@ -382,25 +374,5 @@ void fixup_irqs(void)
 		if (__this_cpu_read(vector_irq[vector]) != VECTOR_RETRIGGERED)
 			__this_cpu_write(vector_irq[vector], VECTOR_UNUSED);
 	}
-}
-#endif
-
-#ifdef CONFIG_X86_THERMAL_VECTOR
-static void smp_thermal_vector(void)
-{
-	if (x86_thermal_enabled())
-		intel_thermal_interrupt();
-	else
-		pr_err("CPU%d: Unexpected LVT thermal interrupt!\n",
-		       smp_processor_id());
-}
-
-DEFINE_IDTENTRY_SYSVEC(sysvec_thermal)
-{
-	trace_thermal_apic_entry(THERMAL_APIC_VECTOR);
-	inc_irq_stat(irq_thermal_count);
-	smp_thermal_vector();
-	trace_thermal_apic_exit(THERMAL_APIC_VECTOR);
-	apic_eoi();
 }
 #endif

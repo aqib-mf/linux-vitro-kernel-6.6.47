@@ -41,19 +41,7 @@
 #include <video/of_videomode.h>
 #include <video/videomode.h>
 
-#define PCR_TFT		(1 << 31)
-#define PCR_COLOR	(1 << 30)
-#define PCR_BPIX_8	(3 << 25)
-#define PCR_BPIX_12	(4 << 25)
-#define PCR_BPIX_16	(5 << 25)
-#define PCR_BPIX_18	(6 << 25)
-
-struct imx_fb_videomode {
-	struct fb_videomode mode;
-	u32 pcr;
-	bool aus_mode;
-	unsigned char	bpp;
-};
+#include <linux/platform_data/video-imxfb.h>
 
 /*
  * Complain if VAR is out of range.
@@ -151,12 +139,6 @@ enum imxfb_type {
 	IMX21_FB,
 };
 
-enum imxfb_panel_type {
-	PANEL_TYPE_MONOCHROME,
-	PANEL_TYPE_CSTN,
-	PANEL_TYPE_TFT,
-};
-
 struct imxfb_info {
 	struct platform_device  *pdev;
 	void __iomem		*regs;
@@ -164,7 +146,6 @@ struct imxfb_info {
 	struct clk		*clk_ahb;
 	struct clk		*clk_per;
 	enum imxfb_type		devtype;
-	enum imxfb_panel_type	panel_type;
 	bool			enabled;
 
 	/*
@@ -452,13 +433,6 @@ static int imxfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 	if (!is_imx1_fb(fbi) && imxfb_mode->aus_mode)
 		fbi->lauscr = LAUSCR_AUS_MODE;
 
-	if (imxfb_mode->pcr & PCR_TFT)
-		fbi->panel_type = PANEL_TYPE_TFT;
-	else if (imxfb_mode->pcr & PCR_COLOR)
-		fbi->panel_type = PANEL_TYPE_CSTN;
-	else
-		fbi->panel_type = PANEL_TYPE_MONOCHROME;
-
 	/*
 	 * Copy the RGB parameters for this display
 	 * from the machine specific parameters.
@@ -595,10 +569,12 @@ static int imxfb_blank(int blank, struct fb_info *info)
 
 static const struct fb_ops imxfb_ops = {
 	.owner		= THIS_MODULE,
-	FB_DEFAULT_IOMEM_OPS,
 	.fb_check_var	= imxfb_check_var,
 	.fb_set_par	= imxfb_set_par,
 	.fb_setcolreg	= imxfb_setcolreg,
+	.fb_fillrect	= cfb_fillrect,
+	.fb_copyarea	= cfb_copyarea,
+	.fb_imageblit	= cfb_imageblit,
 	.fb_blank	= imxfb_blank,
 };
 
@@ -611,7 +587,6 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 {
 	struct imxfb_info *fbi = info->par;
 	u32 ymax_mask = is_imx1_fb(fbi) ? YMAX_MASK_IMX1 : YMAX_MASK_IMX21;
-	u8 left_margin_low;
 
 	pr_debug("var: xres=%d hslen=%d lm=%d rm=%d\n",
 		var->xres, var->hsync_len,
@@ -620,13 +595,6 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 		var->yres, var->vsync_len,
 		var->upper_margin, var->lower_margin);
 
-	if (fbi->panel_type == PANEL_TYPE_TFT)
-		left_margin_low = 3;
-	else if (fbi->panel_type == PANEL_TYPE_CSTN)
-		left_margin_low = 2;
-	else
-		left_margin_low = 0;
-
 #if DEBUG_VAR
 	if (var->xres < 16        || var->xres > 1024)
 		printk(KERN_ERR "%s: invalid xres %d\n",
@@ -634,10 +602,10 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 	if (var->hsync_len < 1    || var->hsync_len > 64)
 		printk(KERN_ERR "%s: invalid hsync_len %d\n",
 			info->fix.id, var->hsync_len);
-	if (var->left_margin < left_margin_low  || var->left_margin > 255)
+	if (var->left_margin > 255)
 		printk(KERN_ERR "%s: invalid left_margin %d\n",
 			info->fix.id, var->left_margin);
-	if (var->right_margin < 1 || var->right_margin > 255)
+	if (var->right_margin > 255)
 		printk(KERN_ERR "%s: invalid right_margin %d\n",
 			info->fix.id, var->right_margin);
 	if (var->yres < 1 || var->yres > ymax_mask)
@@ -660,7 +628,7 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 
 	writel(HCR_H_WIDTH(var->hsync_len - 1) |
 		HCR_H_WAIT_1(var->right_margin - 1) |
-		HCR_H_WAIT_2(var->left_margin - left_margin_low),
+		HCR_H_WAIT_2(var->left_margin - 3),
 		fbi->regs + LCDC_HCR);
 
 	writel(VCR_V_WIDTH(var->vsync_len) |
@@ -688,14 +656,14 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 
 static int imxfb_init_fbinfo(struct platform_device *pdev)
 {
-	struct fb_info *info = platform_get_drvdata(pdev);
+	struct imx_fb_platform_data *pdata = dev_get_platdata(&pdev->dev);
+	struct fb_info *info = dev_get_drvdata(&pdev->dev);
 	struct imxfb_info *fbi = info->par;
 	struct device_node *np;
 
 	pr_debug("%s\n",__func__);
 
-	info->pseudo_palette = devm_kmalloc_array(&pdev->dev, 16,
-						  sizeof(u32), GFP_KERNEL);
+	info->pseudo_palette = kmalloc_array(16, sizeof(u32), GFP_KERNEL);
 	if (!info->pseudo_palette)
 		return -ENOMEM;
 
@@ -703,7 +671,7 @@ static int imxfb_init_fbinfo(struct platform_device *pdev)
 
 	fbi->devtype = pdev->id_entry->driver_data;
 
-	strscpy(info->fix.id, IMX_NAME, sizeof(info->fix.id));
+	strlcpy(info->fix.id, IMX_NAME, sizeof(info->fix.id));
 
 	info->fix.type			= FB_TYPE_PACKED_PIXELS;
 	info->fix.type_aux		= 0;
@@ -720,21 +688,27 @@ static int imxfb_init_fbinfo(struct platform_device *pdev)
 	info->var.vmode			= FB_VMODE_NONINTERLACED;
 
 	info->fbops			= &imxfb_ops;
-	info->flags			= FBINFO_READS_FAST;
+	info->flags			= FBINFO_FLAG_DEFAULT |
+					  FBINFO_READS_FAST;
+	if (pdata) {
+		fbi->lscr1			= pdata->lscr1;
+		fbi->dmacr			= pdata->dmacr;
+		fbi->pwmr			= pdata->pwmr;
+	} else {
+		np = pdev->dev.of_node;
+		info->var.grayscale = of_property_read_bool(np,
+						"cmap-greyscale");
+		fbi->cmap_inverse = of_property_read_bool(np, "cmap-inverse");
+		fbi->cmap_static = of_property_read_bool(np, "cmap-static");
 
-	np = pdev->dev.of_node;
-	info->var.grayscale = of_property_read_bool(np,
-					"cmap-greyscale");
-	fbi->cmap_inverse = of_property_read_bool(np, "cmap-inverse");
-	fbi->cmap_static = of_property_read_bool(np, "cmap-static");
+		fbi->lscr1 = IMXFB_LSCR1_DEFAULT;
 
-	fbi->lscr1 = IMXFB_LSCR1_DEFAULT;
+		of_property_read_u32(np, "fsl,lpccr", &fbi->pwmr);
 
-	of_property_read_u32(np, "fsl,lpccr", &fbi->pwmr);
+		of_property_read_u32(np, "fsl,lscr1", &fbi->lscr1);
 
-	of_property_read_u32(np, "fsl,lscr1", &fbi->lscr1);
-
-	of_property_read_u32(np, "fsl,dmacr", &fbi->dmacr);
+		of_property_read_u32(np, "fsl,dmacr", &fbi->dmacr);
+	}
 
 	return 0;
 }
@@ -889,9 +863,10 @@ static int imxfb_probe(struct platform_device *pdev)
 	struct imxfb_info *fbi;
 	struct lcd_device *lcd;
 	struct fb_info *info;
+	struct imx_fb_platform_data *pdata;
+	struct resource *res;
 	struct imx_fb_videomode *m;
 	const struct of_device_id *of_id;
-	struct device_node *display_np;
 	int ret, i;
 	int bytes_per_pixel;
 
@@ -905,6 +880,12 @@ static int imxfb_probe(struct platform_device *pdev)
 	if (of_id)
 		pdev->id_entry = of_id->data;
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -ENODEV;
+
+	pdata = dev_get_platdata(&pdev->dev);
+
 	info = framebuffer_alloc(sizeof(struct imxfb_info), &pdev->dev);
 	if (!info)
 		return -ENOMEM;
@@ -917,33 +898,40 @@ static int imxfb_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto failed_init;
 
-	fb_mode = NULL;
+	if (pdata) {
+		if (!fb_mode)
+			fb_mode = pdata->mode[0].mode.name;
 
-	display_np = of_parse_phandle(pdev->dev.of_node, "display", 0);
-	if (!display_np) {
-		dev_err(&pdev->dev, "No display defined in devicetree\n");
-		ret = -EINVAL;
-		goto failed_init;
+		fbi->mode = pdata->mode;
+		fbi->num_modes = pdata->num_modes;
+	} else {
+		struct device_node *display_np;
+		fb_mode = NULL;
+
+		display_np = of_parse_phandle(pdev->dev.of_node, "display", 0);
+		if (!display_np) {
+			dev_err(&pdev->dev, "No display defined in devicetree\n");
+			ret = -EINVAL;
+			goto failed_of_parse;
+		}
+
+		/*
+		 * imxfb does not support more modes, we choose only the native
+		 * mode.
+		 */
+		fbi->num_modes = 1;
+
+		fbi->mode = devm_kzalloc(&pdev->dev,
+				sizeof(struct imx_fb_videomode), GFP_KERNEL);
+		if (!fbi->mode) {
+			ret = -ENOMEM;
+			goto failed_of_parse;
+		}
+
+		ret = imxfb_of_read_mode(&pdev->dev, display_np, fbi->mode);
+		if (ret)
+			goto failed_of_parse;
 	}
-
-	/*
-	 * imxfb does not support more modes, we choose only the native
-	 * mode.
-	 */
-	fbi->num_modes = 1;
-
-	fbi->mode = devm_kzalloc(&pdev->dev,
-			sizeof(struct imx_fb_videomode), GFP_KERNEL);
-	if (!fbi->mode) {
-		ret = -ENOMEM;
-		of_node_put(display_np);
-		goto failed_init;
-	}
-
-	ret = imxfb_of_read_mode(&pdev->dev, display_np, fbi->mode);
-	of_node_put(display_np);
-	if (ret)
-		goto failed_init;
 
 	/* Calculate maximum bytes used per pixel. In most cases this should
 	 * be the same as m->bpp/8 */
@@ -953,10 +941,17 @@ static int imxfb_probe(struct platform_device *pdev)
 		info->fix.smem_len = max_t(size_t, info->fix.smem_len,
 				m->mode.xres * m->mode.yres * bytes_per_pixel);
 
+	res = request_mem_region(res->start, resource_size(res),
+				DRIVER_NAME);
+	if (!res) {
+		ret = -EBUSY;
+		goto failed_req;
+	}
+
 	fbi->clk_ipg = devm_clk_get(&pdev->dev, "ipg");
 	if (IS_ERR(fbi->clk_ipg)) {
 		ret = PTR_ERR(fbi->clk_ipg);
-		goto failed_init;
+		goto failed_getclock;
 	}
 
 	/*
@@ -971,25 +966,26 @@ static int imxfb_probe(struct platform_device *pdev)
 	 */
 	ret = clk_prepare_enable(fbi->clk_ipg);
 	if (ret)
-		goto failed_init;
+		goto failed_getclock;
 	clk_disable_unprepare(fbi->clk_ipg);
 
 	fbi->clk_ahb = devm_clk_get(&pdev->dev, "ahb");
 	if (IS_ERR(fbi->clk_ahb)) {
 		ret = PTR_ERR(fbi->clk_ahb);
-		goto failed_init;
+		goto failed_getclock;
 	}
 
 	fbi->clk_per = devm_clk_get(&pdev->dev, "per");
 	if (IS_ERR(fbi->clk_per)) {
 		ret = PTR_ERR(fbi->clk_per);
-		goto failed_init;
+		goto failed_getclock;
 	}
 
-	fbi->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(fbi->regs)) {
-		ret = PTR_ERR(fbi->regs);
-		goto failed_init;
+	fbi->regs = ioremap(res->start, resource_size(res));
+	if (fbi->regs == NULL) {
+		dev_err(&pdev->dev, "Cannot map frame buffer registers\n");
+		ret = -ENOMEM;
+		goto failed_ioremap;
 	}
 
 	fbi->map_size = PAGE_ALIGN(info->fix.smem_len);
@@ -998,10 +994,17 @@ static int imxfb_probe(struct platform_device *pdev)
 	if (!info->screen_buffer) {
 		dev_err(&pdev->dev, "Failed to allocate video RAM\n");
 		ret = -ENOMEM;
-		goto failed_init;
+		goto failed_map;
 	}
 
 	info->fix.smem_start = fbi->map_dma;
+
+	if (pdata && pdata->init) {
+		ret = pdata->init(fbi->pdev);
+		if (ret)
+			goto failed_platform_init;
+	}
+
 
 	INIT_LIST_HEAD(&info->modelist);
 	for (i = 0; i < fbi->num_modes; i++)
@@ -1050,31 +1053,55 @@ static int imxfb_probe(struct platform_device *pdev)
 
 failed_lcd:
 	unregister_framebuffer(info);
+
 failed_register:
 	fb_dealloc_cmap(&info->cmap);
 failed_cmap:
+	if (pdata && pdata->exit)
+		pdata->exit(fbi->pdev);
+failed_platform_init:
 	dma_free_wc(&pdev->dev, fbi->map_size, info->screen_buffer,
 		    fbi->map_dma);
+failed_map:
+	iounmap(fbi->regs);
+failed_ioremap:
+failed_getclock:
+	release_mem_region(res->start, resource_size(res));
+failed_req:
+failed_of_parse:
+	kfree(info->pseudo_palette);
 failed_init:
 	framebuffer_release(info);
 	return ret;
 }
 
-static void imxfb_remove(struct platform_device *pdev)
+static int imxfb_remove(struct platform_device *pdev)
 {
+	struct imx_fb_platform_data *pdata;
 	struct fb_info *info = platform_get_drvdata(pdev);
 	struct imxfb_info *fbi = info->par;
+	struct resource *res;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
 	imxfb_disable_controller(fbi);
 
 	unregister_framebuffer(info);
 	fb_dealloc_cmap(&info->cmap);
+	pdata = dev_get_platdata(&pdev->dev);
+	if (pdata && pdata->exit)
+		pdata->exit(fbi->pdev);
 	dma_free_wc(&pdev->dev, fbi->map_size, info->screen_buffer,
 		    fbi->map_dma);
+	iounmap(fbi->regs);
+	release_mem_region(res->start, resource_size(res));
+	kfree(info->pseudo_palette);
 	framebuffer_release(info);
+
+	return 0;
 }
 
-static int imxfb_suspend(struct device *dev)
+static int __maybe_unused imxfb_suspend(struct device *dev)
 {
 	struct fb_info *info = dev_get_drvdata(dev);
 	struct imxfb_info *fbi = info->par;
@@ -1084,7 +1111,7 @@ static int imxfb_suspend(struct device *dev)
 	return 0;
 }
 
-static int imxfb_resume(struct device *dev)
+static int __maybe_unused imxfb_resume(struct device *dev)
 {
 	struct fb_info *info = dev_get_drvdata(dev);
 	struct imxfb_info *fbi = info->par;
@@ -1094,16 +1121,16 @@ static int imxfb_resume(struct device *dev)
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(imxfb_pm_ops, imxfb_suspend, imxfb_resume);
+static SIMPLE_DEV_PM_OPS(imxfb_pm_ops, imxfb_suspend, imxfb_resume);
 
 static struct platform_driver imxfb_driver = {
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.of_match_table = imxfb_of_dev_id,
-		.pm	= pm_sleep_ptr(&imxfb_pm_ops),
+		.pm	= &imxfb_pm_ops,
 	},
 	.probe		= imxfb_probe,
-	.remove_new	= imxfb_remove,
+	.remove		= imxfb_remove,
 	.id_table	= imxfb_devtype,
 };
 module_platform_driver(imxfb_driver);

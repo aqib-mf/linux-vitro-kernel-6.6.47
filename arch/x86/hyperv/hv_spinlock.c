@@ -20,11 +20,12 @@ static bool __initdata hv_pvspin = true;
 
 static void hv_qlock_kick(int cpu)
 {
-	__apic_send_IPI(cpu, X86_PLATFORM_IPI_VECTOR);
+	apic->send_IPI(cpu, X86_PLATFORM_IPI_VECTOR);
 }
 
 static void hv_qlock_wait(u8 *byte, u8 val)
 {
+	unsigned long msr_val;
 	unsigned long flags;
 
 	if (in_nmi())
@@ -47,13 +48,8 @@ static void hv_qlock_wait(u8 *byte, u8 val)
 	/*
 	 * Only issue the rdmsrl() when the lock state has not changed.
 	 */
-	if (READ_ONCE(*byte) == val) {
-		unsigned long msr_val;
-
+	if (READ_ONCE(*byte) == val)
 		rdmsrl(HV_X64_MSR_GUEST_IDLE, msr_val);
-
-		(void)msr_val;
-	}
 	local_irq_restore(flags);
 }
 

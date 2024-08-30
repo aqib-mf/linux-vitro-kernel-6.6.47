@@ -24,9 +24,6 @@
 #include <linux/random.h>
 
 #include "gt/intel_gt_pm.h"
-#include "gt/uc/intel_gsc_fw.h"
-
-#include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_selftest.h"
 
@@ -129,31 +126,6 @@ static void set_default_test_all(struct selftest *st, unsigned int count)
 		st[i].enabled = true;
 }
 
-static bool
-__gsc_proxy_init_progressing(struct intel_gsc_uc *gsc)
-{
-	return intel_gsc_uc_fw_proxy_get_status(gsc) == -EAGAIN;
-}
-
-static void
-__wait_gsc_proxy_completed(struct drm_i915_private *i915)
-{
-	bool need_to_wait = (IS_ENABLED(CONFIG_INTEL_MEI_GSC_PROXY) &&
-			     i915->media_gt &&
-			     HAS_ENGINE(i915->media_gt, GSC0) &&
-			     intel_uc_fw_is_loadable(&i915->media_gt->uc.gsc.fw));
-	/*
-	 * The gsc proxy component depends on the kernel component driver load ordering
-	 * and in corner cases (the first time after an IFWI flash), init-completion
-	 * firmware flows take longer.
-	 */
-	unsigned long timeout_ms = 8000;
-
-	if (need_to_wait && wait_for(!__gsc_proxy_init_progressing(&i915->media_gt->uc.gsc),
-				     timeout_ms))
-		pr_warn(DRIVER_NAME "Timed out waiting for gsc_proxy_completion!\n");
-}
-
 static int __run_selftests(const char *name,
 			   struct selftest *st,
 			   unsigned int count,
@@ -162,7 +134,7 @@ static int __run_selftests(const char *name,
 	int err = 0;
 
 	while (!i915_selftest.random_seed)
-		i915_selftest.random_seed = get_random_u32();
+		i915_selftest.random_seed = get_random_int();
 
 	i915_selftest.timeout_jiffies =
 		i915_selftest.timeout_ms ?
@@ -215,7 +187,7 @@ int i915_mock_selftests(void)
 	err = run_selftests(mock, NULL);
 	if (err) {
 		i915_selftest.mock = err;
-		return 1;
+		return err;
 	}
 
 	if (i915_selftest.mock < 0) {
@@ -232,8 +204,6 @@ int i915_live_selftests(struct pci_dev *pdev)
 
 	if (!i915_selftest.live)
 		return 0;
-
-	__wait_gsc_proxy_completed(pdev_to_i915(pdev));
 
 	err = run_selftests(live, pdev_to_i915(pdev));
 	if (err) {
@@ -255,8 +225,6 @@ int i915_perf_selftests(struct pci_dev *pdev)
 
 	if (!i915_selftest.perf)
 		return 0;
-
-	__wait_gsc_proxy_completed(pdev_to_i915(pdev));
 
 	err = run_selftests(perf, pdev_to_i915(pdev));
 	if (err) {
@@ -330,10 +298,10 @@ int __i915_live_setup(void *data)
 	struct drm_i915_private *i915 = data;
 
 	/* The selftests expect an idle system */
-	if (intel_gt_pm_wait_for_idle(to_gt(i915)))
+	if (intel_gt_pm_wait_for_idle(&i915->gt))
 		return -EIO;
 
-	return intel_gt_terminally_wedged(to_gt(i915));
+	return intel_gt_terminally_wedged(&i915->gt);
 }
 
 int __i915_live_teardown(int err, void *data)
@@ -462,7 +430,7 @@ module_param_named(st_timeout, i915_selftest.timeout_ms, uint, 0400);
 module_param_named(st_filter, i915_selftest.filter, charp, 0400);
 
 module_param_named_unsafe(mock_selftests, i915_selftest.mock, int, 0400);
-MODULE_PARM_DESC(mock_selftests, "Run selftests before loading, using mock hardware (0:disabled [default], 1:run tests then load driver, -1:run tests then leave dummy module)");
+MODULE_PARM_DESC(mock_selftests, "Run selftests before loading, using mock hardware (0:disabled [default], 1:run tests then load driver, -1:run tests then exit module)");
 
 module_param_named_unsafe(live_selftests, i915_selftest.live, int, 0400);
 MODULE_PARM_DESC(live_selftests, "Run selftests after driver initialisation on the live system (0:disabled [default], 1:run tests then continue, -1:run tests then exit module)");

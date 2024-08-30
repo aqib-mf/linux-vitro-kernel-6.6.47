@@ -9,12 +9,9 @@
  */
 
 #include <linux/bug.h>
-#include <linux/kernel.h>
-#include <linux/types.h>
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 #include <asm/purgatory.h>
 
-#include "../boot/compressed/error.h"
 #include "../boot/string.h"
 
 u8 purgatory_sha256_digest[SHA256_DIGEST_SIZE] __section(".kexec-purgatory");

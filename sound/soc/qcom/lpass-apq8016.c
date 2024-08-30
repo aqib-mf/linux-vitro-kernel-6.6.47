@@ -41,6 +41,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 	[MI2S_SECONDARY] =  {
@@ -61,6 +62,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 	[MI2S_TERTIARY] =  {
@@ -81,6 +83,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 	[MI2S_QUATERNARY] =  {
@@ -116,6 +119,7 @@ static struct snd_soc_dai_driver apq8016_lpass_cpu_dai_driver[] = {
 			.channels_min	= 1,
 			.channels_max	= 8,
 		},
+		.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 		.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 	},
 };
@@ -287,9 +291,8 @@ static struct lpass_variant apq8016_data = {
 	.free_dma_channel	= apq8016_lpass_free_dma_channel,
 };
 
-static const struct of_device_id apq8016_lpass_cpu_device_id[] __maybe_unused = {
+static const struct of_device_id apq8016_lpass_cpu_device_id[] = {
 	{ .compatible = "qcom,lpass-cpu-apq8016", .data = &apq8016_data },
-	{ .compatible = "qcom,apq8016-lpass-cpu", .data = &apq8016_data },
 	{}
 };
 MODULE_DEVICE_TABLE(of, apq8016_lpass_cpu_device_id);

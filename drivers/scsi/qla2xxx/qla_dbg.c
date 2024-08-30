@@ -12,12 +12,13 @@
  * ----------------------------------------------------------------------
  * | Module Init and Probe        |       0x0199       |                |
  * | Mailbox commands             |       0x1206       | 0x11a5-0x11ff	|
- * | Device Discovery             |       0x2134       | 0x2112-0x2115  |
- * |                              |                    | 0x2127-0x2128  |
+ * | Device Discovery             |       0x2134       | 0x210e-0x2115  |
+ * |                              |                    | 0x211c-0x2128  |
+ * |                              |                    | 0x212c-0x2134  |
  * | Queue Command and IO tracing |       0x3074       | 0x300b         |
  * |                              |                    | 0x3027-0x3028  |
  * |                              |                    | 0x303d-0x3041  |
- * |                              |                    | 0x302e,0x3033  |
+ * |                              |                    | 0x302d,0x3033  |
  * |                              |                    | 0x3036,0x3038  |
  * |                              |                    | 0x303a		|
  * | DPC Thread                   |       0x4023       | 0x4002,0x4013  |
@@ -111,13 +112,8 @@ qla27xx_dump_mpi_ram(struct qla_hw_data *ha, uint32_t addr, uint32_t *ram,
 	uint32_t stat;
 	ulong i, j, timer = 6000000;
 	int rval = QLA_FUNCTION_FAILED;
-	scsi_qla_host_t *vha = pci_get_drvdata(ha->pdev);
 
 	clear_bit(MBX_INTERRUPT, &ha->mbx_cmd_flags);
-
-	if (qla_pci_disconnected(vha, reg))
-		return rval;
-
 	for (i = 0; i < ram_dwords; i += dwords, addr += dwords) {
 		if (i + dwords > ram_dwords)
 			dwords = ram_dwords - i;
@@ -140,9 +136,6 @@ qla27xx_dump_mpi_ram(struct qla_hw_data *ha, uint32_t addr, uint32_t *ram,
 		ha->flags.mbox_int = 0;
 		while (timer--) {
 			udelay(5);
-
-			if (qla_pci_disconnected(vha, reg))
-				return rval;
 
 			stat = rd_reg_dword(&reg->host_status);
 			/* Check for pending interrupts. */
@@ -198,12 +191,8 @@ qla24xx_dump_ram(struct qla_hw_data *ha, uint32_t addr, __be32 *ram,
 	uint32_t dwords = qla2x00_gid_list_size(ha) / 4;
 	uint32_t stat;
 	ulong i, j, timer = 6000000;
-	scsi_qla_host_t *vha = pci_get_drvdata(ha->pdev);
 
 	clear_bit(MBX_INTERRUPT, &ha->mbx_cmd_flags);
-
-	if (qla_pci_disconnected(vha, reg))
-		return rval;
 
 	for (i = 0; i < ram_dwords; i += dwords, addr += dwords) {
 		if (i + dwords > ram_dwords)
@@ -226,10 +215,8 @@ qla24xx_dump_ram(struct qla_hw_data *ha, uint32_t addr, __be32 *ram,
 		ha->flags.mbox_int = 0;
 		while (timer--) {
 			udelay(5);
-			if (qla_pci_disconnected(vha, reg))
-				return rval;
-
 			stat = rd_reg_dword(&reg->host_status);
+
 			/* Check for pending interrupts. */
 			if (!(stat & HSRX_RISC_INT))
 				continue;
@@ -2454,7 +2441,7 @@ qla83xx_fw_dump_failed_0:
 /****************************************************************************/
 
 /* Write the debug message prefix into @pbuf. */
-static void ql_dbg_prefix(char *pbuf, int pbuf_size, struct pci_dev *pdev,
+static void ql_dbg_prefix(char *pbuf, int pbuf_size,
 			  const scsi_qla_host_t *vha, uint msg_id)
 {
 	if (vha) {
@@ -2463,9 +2450,6 @@ static void ql_dbg_prefix(char *pbuf, int pbuf_size, struct pci_dev *pdev,
 		/* <module-name> [<dev-name>]-<msg-id>:<host>: */
 		snprintf(pbuf, pbuf_size, "%s [%s]-%04x:%lu: ", QL_MSGHDR,
 			 dev_name(&(pdev->dev)), msg_id, vha->host_no);
-	} else if (pdev) {
-		snprintf(pbuf, pbuf_size, "%s [%s]-%04x: : ", QL_MSGHDR,
-			 dev_name(&pdev->dev), msg_id);
 	} else {
 		/* <module-name> [<dev-name>]-<msg-id>: : */
 		snprintf(pbuf, pbuf_size, "%s [%s]-%04x: : ", QL_MSGHDR,
@@ -2493,20 +2477,20 @@ ql_dbg(uint level, scsi_qla_host_t *vha, uint id, const char *fmt, ...)
 	struct va_format vaf;
 	char pbuf[64];
 
-	ql_ktrace(1, level, pbuf, NULL, vha, id, fmt);
-
-	if (!ql_mask_match(level))
+	if (!ql_mask_match(level) && !trace_ql_dbg_log_enabled())
 		return;
-
-	if (!pbuf[0]) /* set by ql_ktrace */
-		ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), NULL, vha, id);
 
 	va_start(va, fmt);
 
 	vaf.fmt = fmt;
 	vaf.va = &va;
 
-	pr_warn("%s%pV", pbuf, &vaf);
+	ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), vha, id);
+
+	if (!ql_mask_match(level))
+		trace_ql_dbg_log(pbuf, &vaf);
+	else
+		pr_warn("%s%pV", pbuf, &vaf);
 
 	va_end(va);
 
@@ -2535,9 +2519,6 @@ ql_dbg_pci(uint level, struct pci_dev *pdev, uint id, const char *fmt, ...)
 
 	if (pdev == NULL)
 		return;
-
-	ql_ktrace(1, level, pbuf, pdev, NULL, id, fmt);
-
 	if (!ql_mask_match(level))
 		return;
 
@@ -2546,9 +2527,7 @@ ql_dbg_pci(uint level, struct pci_dev *pdev, uint id, const char *fmt, ...)
 	vaf.fmt = fmt;
 	vaf.va = &va;
 
-	if (!pbuf[0]) /* set by ql_ktrace */
-		ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), pdev, NULL,
-			      id + ql_dbg_offset);
+	ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), NULL, id + ql_dbg_offset);
 	pr_warn("%s%pV", pbuf, &vaf);
 
 	va_end(va);
@@ -2577,10 +2556,7 @@ ql_log(uint level, scsi_qla_host_t *vha, uint id, const char *fmt, ...)
 	if (level > ql_errlev)
 		return;
 
-	ql_ktrace(0, level, pbuf, NULL, vha, id, fmt);
-
-	if (!pbuf[0]) /* set by ql_ktrace */
-		ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), NULL, vha, id);
+	ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), vha, id);
 
 	va_start(va, fmt);
 
@@ -2631,10 +2607,7 @@ ql_log_pci(uint level, struct pci_dev *pdev, uint id, const char *fmt, ...)
 	if (level > ql_errlev)
 		return;
 
-	ql_ktrace(0, level, pbuf, pdev, NULL, id, fmt);
-
-	if (!pbuf[0]) /* set by ql_ktrace */
-		ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), pdev, NULL, id);
+	ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), NULL, id);
 
 	va_start(va, fmt);
 
@@ -2729,11 +2702,7 @@ ql_log_qp(uint32_t level, struct qla_qpair *qpair, int32_t id,
 	if (level > ql_errlev)
 		return;
 
-	ql_ktrace(0, level, pbuf, NULL, qpair ? qpair->vha : NULL, id, fmt);
-
-	if (!pbuf[0]) /* set by ql_ktrace */
-		ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), NULL,
-			      qpair ? qpair->vha : NULL, id);
+	ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), qpair ? qpair->vha : NULL, id);
 
 	va_start(va, fmt);
 
@@ -2779,8 +2748,6 @@ ql_dbg_qp(uint32_t level, struct qla_qpair *qpair, int32_t id,
 	struct va_format vaf;
 	char pbuf[128];
 
-	ql_ktrace(1, level, pbuf, NULL, qpair ? qpair->vha : NULL, id, fmt);
-
 	if (!ql_mask_match(level))
 		return;
 
@@ -2789,10 +2756,8 @@ ql_dbg_qp(uint32_t level, struct qla_qpair *qpair, int32_t id,
 	vaf.fmt = fmt;
 	vaf.va = &va;
 
-	if (!pbuf[0]) /* set by ql_ktrace */
-		ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), NULL,
-			      qpair ? qpair->vha : NULL, id + ql_dbg_offset);
-
+	ql_dbg_prefix(pbuf, ARRAY_SIZE(pbuf), qpair ? qpair->vha : NULL,
+		      id + ql_dbg_offset);
 	pr_warn("%s%pV", pbuf, &vaf);
 
 	va_end(va);

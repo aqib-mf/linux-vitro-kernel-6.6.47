@@ -22,6 +22,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
+#include <linux/pm_runtime.h>
 
 #include "8250.h"
 
@@ -60,7 +61,7 @@ static const struct of_device_id serial_pxa_dt_ids[] = {
 MODULE_DEVICE_TABLE(of, serial_pxa_dt_ids);
 
 /* Uart divisor latch write */
-static void serial_pxa_dl_write(struct uart_8250_port *up, u32 value)
+static void serial_pxa_dl_write(struct uart_8250_port *up, int value)
 {
 	unsigned int dll;
 
@@ -124,7 +125,6 @@ static int serial_pxa_probe(struct platform_device *pdev)
 	uart.port.regshift = 2;
 	uart.port.irq = irq;
 	uart.port.fifosize = 64;
-	uart.tx_loadsz = 32;
 	uart.port.flags = UPF_IOREMAP | UPF_SKIP_TEST | UPF_FIXED_TYPE;
 	uart.port.dev = &pdev->dev;
 	uart.port.uartclk = clk_get_rate(data->clk);
@@ -184,7 +184,6 @@ static int __init early_serial_pxa_setup(struct earlycon_device *device,
 	return early_serial8250_setup(device, NULL);
 }
 OF_EARLYCON_DECLARE(early_pxa, "mrvl,pxa-uart", early_serial_pxa_setup);
-OF_EARLYCON_DECLARE(mmp, "mrvl,mmp-uart", early_serial_pxa_setup);
 #endif
 
 MODULE_AUTHOR("Sergei Ianovich");

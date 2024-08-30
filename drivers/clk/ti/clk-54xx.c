@@ -156,8 +156,6 @@ static const struct omap_clkctrl_reg_data omap5_l3main1_clkctrl_regs[] __initcon
 
 static const struct omap_clkctrl_reg_data omap5_l3main2_clkctrl_regs[] __initconst = {
 	{ OMAP5_L3_MAIN_2_CLKCTRL, NULL, 0, "l3_iclk_div" },
-	{ OMAP5_L3_MAIN_2_GPMC_CLKCTRL, NULL, CLKF_HW_SUP, "l3_iclk_div" },
-	{ OMAP5_L3_MAIN_2_OCMC_RAM_CLKCTRL, NULL, CLKF_HW_SUP, "l3_iclk_div" },
 	{ 0 },
 };
 
@@ -565,19 +563,15 @@ static struct ti_dt_clk omap54xx_clks[] = {
 	DT_CLK(NULL, "gpio8_dbclk", "l4per-clkctrl:00f8:8"),
 	DT_CLK(NULL, "mcbsp1_gfclk", "abe-clkctrl:0028:24"),
 	DT_CLK(NULL, "mcbsp1_sync_mux_ck", "abe-clkctrl:0028:26"),
-	DT_CLK("40122000.mcbsp", "prcm_fck", "abe-clkctrl:0028:26"),
 	DT_CLK(NULL, "mcbsp2_gfclk", "abe-clkctrl:0030:24"),
 	DT_CLK(NULL, "mcbsp2_sync_mux_ck", "abe-clkctrl:0030:26"),
-	DT_CLK("40124000.mcbsp", "prcm_fck", "abe-clkctrl:0030:26"),
 	DT_CLK(NULL, "mcbsp3_gfclk", "abe-clkctrl:0038:24"),
 	DT_CLK(NULL, "mcbsp3_sync_mux_ck", "abe-clkctrl:0038:26"),
-	DT_CLK("40126000.mcbsp", "prcm_fck", "abe-clkctrl:0038:26"),
 	DT_CLK(NULL, "mmc1_32khz_clk", "l3init-clkctrl:0008:8"),
 	DT_CLK(NULL, "mmc1_fclk", "l3init-clkctrl:0008:25"),
 	DT_CLK(NULL, "mmc1_fclk_mux", "l3init-clkctrl:0008:24"),
 	DT_CLK(NULL, "mmc2_fclk", "l3init-clkctrl:0010:25"),
 	DT_CLK(NULL, "mmc2_fclk_mux", "l3init-clkctrl:0010:24"),
-	DT_CLK(NULL, "pad_fck", "pad_clks_ck"),
 	DT_CLK(NULL, "sata_ref_clk", "l3init-clkctrl:0068:8"),
 	DT_CLK(NULL, "timer10_gfclk_mux", "l4per-clkctrl:0008:24"),
 	DT_CLK(NULL, "timer11_gfclk_mux", "l4per-clkctrl:0010:24"),
@@ -611,7 +605,7 @@ static struct ti_dt_clk omap54xx_clks[] = {
 int __init omap5xxx_dt_clk_init(void)
 {
 	int rc;
-	struct clk *abe_dpll_ref, *abe_dpll, *abe_dpll_byp, *sys_32k_ck, *usb_dpll;
+	struct clk *abe_dpll_ref, *abe_dpll, *sys_32k_ck, *usb_dpll;
 
 	ti_dt_clocks_register(omap54xx_clks);
 
@@ -622,16 +616,6 @@ int __init omap5xxx_dt_clk_init(void)
 	abe_dpll_ref = clk_get_sys(NULL, "abe_dpll_clk_mux");
 	sys_32k_ck = clk_get_sys(NULL, "sys_32k_ck");
 	rc = clk_set_parent(abe_dpll_ref, sys_32k_ck);
-
-	/*
-	 * This must also be set to sys_32k_ck to match or
-	 * the ABE DPLL will not lock on a warm reboot when
-	 * ABE timers are used.
-	 */
-	abe_dpll_byp = clk_get_sys(NULL, "abe_dpll_bypass_clk_mux");
-	if (!rc)
-		rc = clk_set_parent(abe_dpll_byp, sys_32k_ck);
-
 	abe_dpll = clk_get_sys(NULL, "dpll_abe_ck");
 	if (!rc)
 		rc = clk_set_rate(abe_dpll, OMAP5_DPLL_ABE_DEFFREQ);

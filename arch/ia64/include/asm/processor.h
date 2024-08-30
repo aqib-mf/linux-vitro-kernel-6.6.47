@@ -243,6 +243,10 @@ DECLARE_PER_CPU(struct cpuinfo_ia64, ia64_cpu_info);
 
 extern void print_cpu_info (struct cpuinfo_ia64 *);
 
+typedef struct {
+	unsigned long seg;
+} mm_segment_t;
+
 #define SET_UNALIGN_CTL(task,value)								\
 ({												\
 	(task)->thread.flags = (((task)->thread.flags & ~IA64_THREAD_UAC_MASK)			\
@@ -318,8 +322,15 @@ struct thread_struct {
 struct mm_struct;
 struct task_struct;
 
+/*
+ * Free all resources held by a thread. This is called after the
+ * parent of DEAD_TASK has collected the exit status of the task via
+ * wait().
+ */
+#define release_thread(dead_task)
+
 /* Get wait channel for task P.  */
-extern unsigned long __get_wchan (struct task_struct *p);
+extern unsigned long get_wchan (struct task_struct *p);
 
 /* Return instruction pointer of blocked task TSK.  */
 #define KSTK_EIP(tsk)					\
@@ -634,6 +645,7 @@ ia64_imva (void *addr)
 
 #define ARCH_HAS_PREFETCH
 #define ARCH_HAS_PREFETCHW
+#define ARCH_HAS_SPINLOCK_PREFETCH
 #define PREFETCH_STRIDE			L1_CACHE_BYTES
 
 static inline void
@@ -647,6 +659,8 @@ prefetchw (const void *x)
 {
 	ia64_lfetch_excl(ia64_lfhint_none, x);
 }
+
+#define spin_lock_prefetch(x)	prefetchw(x)
 
 extern unsigned long boot_option_idle_override;
 

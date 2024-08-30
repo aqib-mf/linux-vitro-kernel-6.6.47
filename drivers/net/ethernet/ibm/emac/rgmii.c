@@ -19,9 +19,7 @@
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/ethtool.h>
-#include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/platform_device.h>
 #include <asm/io.h>
 
 #include "emac.h"
@@ -244,7 +242,7 @@ static int rgmii_probe(struct platform_device *ofdev)
 	}
 
 	/* Check for RGMII flags */
-	if (of_property_read_bool(ofdev->dev.of_node, "has-mdio"))
+	if (of_get_property(ofdev->dev.of_node, "has-mdio", NULL))
 		dev->flags |= EMAC_RGMII_FLAG_HAS_MDIO;
 
 	/* CAB lacks the right properties, fix this up */

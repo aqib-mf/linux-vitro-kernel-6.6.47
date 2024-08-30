@@ -30,9 +30,9 @@ mlx5_eswitch_termtbl_hash(struct mlx5_flow_act *flow_act,
 		     sizeof(dest->vport.num), hash);
 	hash = jhash((const void *)&dest->vport.vhca_id,
 		     sizeof(dest->vport.num), hash);
-	if (flow_act->pkt_reformat)
-		hash = jhash(flow_act->pkt_reformat,
-			     sizeof(*flow_act->pkt_reformat),
+	if (dest->vport.pkt_reformat)
+		hash = jhash(dest->vport.pkt_reformat,
+			     sizeof(*dest->vport.pkt_reformat),
 			     hash);
 	return hash;
 }
@@ -53,11 +53,9 @@ mlx5_eswitch_termtbl_cmp(struct mlx5_flow_act *flow_act1,
 	if (ret)
 		return ret;
 
-	if (flow_act1->pkt_reformat && flow_act2->pkt_reformat)
-		return memcmp(flow_act1->pkt_reformat, flow_act2->pkt_reformat,
-			      sizeof(*flow_act1->pkt_reformat));
-
-	return !(flow_act1->pkt_reformat == flow_act2->pkt_reformat);
+	return dest1->vport.pkt_reformat && dest2->vport.pkt_reformat ?
+	       memcmp(dest1->vport.pkt_reformat, dest2->vport.pkt_reformat,
+		      sizeof(*dest1->vport.pkt_reformat)) : 0;
 }
 
 static int
@@ -67,7 +65,7 @@ mlx5_eswitch_termtbl_create(struct mlx5_core_dev *dev,
 {
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_flow_namespace *root_ns;
-	int err, err2;
+	int err;
 
 	root_ns = mlx5_get_flow_namespace(dev, MLX5_FLOW_NAMESPACE_FDB);
 	if (!root_ns) {
@@ -86,26 +84,24 @@ mlx5_eswitch_termtbl_create(struct mlx5_core_dev *dev,
 	ft_attr.autogroup.max_num_groups = 1;
 	tt->termtbl = mlx5_create_auto_grouped_flow_table(root_ns, &ft_attr);
 	if (IS_ERR(tt->termtbl)) {
-		err = PTR_ERR(tt->termtbl);
-		esw_warn(dev, "Failed to create termination table, err %pe\n", tt->termtbl);
-		return err;
+		esw_warn(dev, "Failed to create termination table\n");
+		return -EOPNOTSUPP;
 	}
 
 	tt->rule = mlx5_add_flow_rules(tt->termtbl, NULL, flow_act,
 				       &tt->dest, 1);
 	if (IS_ERR(tt->rule)) {
-		err = PTR_ERR(tt->rule);
-		esw_warn(dev, "Failed to create termination table rule, err %pe\n", tt->rule);
+		esw_warn(dev, "Failed to create termination table rule\n");
 		goto add_flow_err;
 	}
 	return 0;
 
 add_flow_err:
-	err2 = mlx5_destroy_flow_table(tt->termtbl);
-	if (err2)
-		esw_warn(dev, "Failed to destroy termination table, err %d\n", err2);
+	err = mlx5_destroy_flow_table(tt->termtbl);
+	if (err)
+		esw_warn(dev, "Failed to destroy termination table\n");
 
-	return err;
+	return -EOPNOTSUPP;
 }
 
 static struct mlx5_termtbl_handle *
@@ -145,9 +141,10 @@ mlx5_eswitch_termtbl_get_create(struct mlx5_eswitch *esw,
 	memcpy(&tt->flow_act, flow_act, sizeof(*flow_act));
 
 	err = mlx5_eswitch_termtbl_create(esw->dev, tt, flow_act);
-	if (err)
+	if (err) {
+		esw_warn(esw->dev, "Failed to create termination table\n");
 		goto tt_create_err;
-
+	}
 	hash_add(esw->offloads.termtbl_tbl, &tt->termtbl_hlist, hash_key);
 tt_add_ref:
 	tt->ref_count++;
@@ -221,20 +218,17 @@ mlx5_eswitch_termtbl_required(struct mlx5_eswitch *esw,
 
 	if (!MLX5_CAP_ESW_FLOWTABLE_FDB(esw->dev, termination_table) ||
 	    !MLX5_CAP_ESW_FLOWTABLE_FDB(esw->dev, ignore_flow_level) ||
-	    mlx5e_tc_attr_flags_skip(attr->flags) ||
-	    (!mlx5_eswitch_offload_is_uplink_port(esw, spec) && !esw_attr->int_port))
+	    attr->flags & MLX5_ESW_ATTR_FLAG_SLOW_PATH ||
+	    !mlx5_eswitch_offload_is_uplink_port(esw, spec))
 		return false;
 
 	/* push vlan on RX */
-	if (flow_act->action & MLX5_FLOW_CONTEXT_ACTION_VLAN_PUSH &&
-	    !(mlx5_fs_get_capabilities(esw->dev, MLX5_FLOW_NAMESPACE_FDB) &
-	      MLX5_FLOW_STEERING_CAP_VLAN_PUSH_ON_RX))
+	if (flow_act->action & MLX5_FLOW_CONTEXT_ACTION_VLAN_PUSH)
 		return true;
 
 	/* hairpin */
 	for (i = esw_attr->split_count; i < esw_attr->out_count; i++)
-		if (!esw_attr->dest_int_port && esw_attr->dests[i].vport_valid &&
-		    esw_attr->dests[i].vport == MLX5_VPORT_UPLINK)
+		if (esw_attr->dests[i].rep->vport == MLX5_VPORT_UPLINK)
 			return true;
 
 	return false;
@@ -277,7 +271,7 @@ mlx5_eswitch_add_termtbl_rule(struct mlx5_eswitch *esw,
 		tt = mlx5_eswitch_termtbl_get_create(esw, &term_tbl_act,
 						     &dest[i], attr);
 		if (IS_ERR(tt)) {
-			esw_warn(esw->dev, "Failed to get termination table, err %pe\n", tt);
+			esw_warn(esw->dev, "Failed to create termination table\n");
 			goto revert_changes;
 		}
 		attr->dests[num_vport_dests].termtbl = tt;
@@ -311,8 +305,6 @@ revert_changes:
 
 	for (curr_dest = 0; curr_dest < num_vport_dests; curr_dest++) {
 		struct mlx5_termtbl_handle *tt = attr->dests[curr_dest].termtbl;
-
-		attr->dests[curr_dest].termtbl = NULL;
 
 		/* search for the destination associated with the
 		 * current term table

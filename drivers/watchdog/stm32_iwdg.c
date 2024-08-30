@@ -17,10 +17,9 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/watchdog.h>
-
-#define DEFAULT_TIMEOUT 10
 
 /* IWDG registers */
 #define IWDG_KR		0x00 /* Key register */
@@ -163,15 +162,18 @@ static int stm32_iwdg_clk_init(struct platform_device *pdev,
 	u32 ret;
 
 	wdt->clk_lsi = devm_clk_get(dev, "lsi");
-	if (IS_ERR(wdt->clk_lsi))
-		return dev_err_probe(dev, PTR_ERR(wdt->clk_lsi), "Unable to get lsi clock\n");
+	if (IS_ERR(wdt->clk_lsi)) {
+		dev_err(dev, "Unable to get lsi clock\n");
+		return PTR_ERR(wdt->clk_lsi);
+	}
 
 	/* optional peripheral clock */
 	if (wdt->data->has_pclk) {
 		wdt->clk_pclk = devm_clk_get(dev, "pclk");
-		if (IS_ERR(wdt->clk_pclk))
-			return dev_err_probe(dev, PTR_ERR(wdt->clk_pclk),
-					     "Unable to get pclk clock\n");
+		if (IS_ERR(wdt->clk_pclk)) {
+			dev_err(dev, "Unable to get pclk clock\n");
+			return PTR_ERR(wdt->clk_pclk);
+		}
 
 		ret = clk_prepare_enable(wdt->clk_pclk);
 		if (ret) {
@@ -238,8 +240,10 @@ static int stm32_iwdg_probe(struct platform_device *pdev)
 
 	/* This is the timer base. */
 	wdt->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(wdt->regs))
+	if (IS_ERR(wdt->regs)) {
+		dev_err(dev, "Could not get resource\n");
 		return PTR_ERR(wdt->regs);
+	}
 
 	ret = stm32_iwdg_clk_init(pdev, wdt);
 	if (ret)
@@ -250,7 +254,6 @@ static int stm32_iwdg_probe(struct platform_device *pdev)
 	wdd->parent = dev;
 	wdd->info = &stm32_iwdg_info;
 	wdd->ops = &stm32_iwdg_ops;
-	wdd->timeout = DEFAULT_TIMEOUT;
 	wdd->min_timeout = DIV_ROUND_UP((RLR_MIN + 1) * PR_MIN, wdt->rate);
 	wdd->max_hw_heartbeat_ms = ((RLR_MAX + 1) * wdt->data->max_prescaler *
 				    1000) / wdt->rate;
@@ -290,7 +293,7 @@ static struct platform_driver stm32_iwdg_driver = {
 	.probe		= stm32_iwdg_probe,
 	.driver = {
 		.name	= "iwdg",
-		.of_match_table = stm32_iwdg_of_match,
+		.of_match_table = of_match_ptr(stm32_iwdg_of_match),
 	},
 };
 module_platform_driver(stm32_iwdg_driver);

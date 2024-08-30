@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * NILFS pathname lookup operations.
+ * namei.c - NILFS pathname lookup operations.
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
  *
@@ -72,8 +72,8 @@ nilfs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
  * If the create succeeds, we fill in the inode information
  * with d_instantiate().
  */
-static int nilfs_create(struct mnt_idmap *idmap, struct inode *dir,
-			struct dentry *dentry, umode_t mode, bool excl)
+static int nilfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+			bool excl)
 {
 	struct inode *inode;
 	struct nilfs_transaction_info ti;
@@ -100,8 +100,7 @@ static int nilfs_create(struct mnt_idmap *idmap, struct inode *dir,
 }
 
 static int
-nilfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
-	    struct dentry *dentry, umode_t mode, dev_t rdev)
+nilfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
 {
 	struct inode *inode;
 	struct nilfs_transaction_info ti;
@@ -125,8 +124,8 @@ nilfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	return err;
 }
 
-static int nilfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, const char *symname)
+static int nilfs_symlink(struct inode *dir, struct dentry *dentry,
+			 const char *symname)
 {
 	struct nilfs_transaction_info ti;
 	struct super_block *sb = dir->i_sb;
@@ -185,7 +184,7 @@ static int nilfs_link(struct dentry *old_dentry, struct inode *dir,
 	if (err)
 		return err;
 
-	inode_set_ctime_current(inode);
+	inode->i_ctime = current_time(inode);
 	inode_inc_link_count(inode);
 	ihold(inode);
 
@@ -202,8 +201,7 @@ static int nilfs_link(struct dentry *old_dentry, struct inode *dir,
 	return err;
 }
 
-static int nilfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-		       struct dentry *dentry, umode_t mode)
+static int nilfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct inode *inode;
 	struct nilfs_transaction_info ti;
@@ -283,7 +281,7 @@ static int nilfs_do_unlink(struct inode *dir, struct dentry *dentry)
 	if (err)
 		goto out;
 
-	inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
+	inode->i_ctime = dir->i_ctime;
 	drop_nlink(inode);
 	err = 0;
 out:
@@ -340,9 +338,8 @@ static int nilfs_rmdir(struct inode *dir, struct dentry *dentry)
 	return err;
 }
 
-static int nilfs_rename(struct mnt_idmap *idmap,
-			struct inode *old_dir, struct dentry *old_dentry,
-			struct inode *new_dir, struct dentry *new_dentry,
+static int nilfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+			struct inode *new_dir,	struct dentry *new_dentry,
 			unsigned int flags)
 {
 	struct inode *old_inode = d_inode(old_dentry);
@@ -387,7 +384,7 @@ static int nilfs_rename(struct mnt_idmap *idmap,
 			goto out_dir;
 		nilfs_set_link(new_dir, new_de, new_page, old_inode);
 		nilfs_mark_inode_dirty(new_dir);
-		inode_set_ctime_current(new_inode);
+		new_inode->i_ctime = current_time(new_inode);
 		if (dir_de)
 			drop_nlink(new_inode);
 		drop_nlink(new_inode);
@@ -406,7 +403,7 @@ static int nilfs_rename(struct mnt_idmap *idmap,
 	 * Like most other Unix systems, set the ctime for inodes on a
 	 * rename.
 	 */
-	inode_set_ctime_current(old_inode);
+	old_inode->i_ctime = current_time(old_inode);
 
 	nilfs_delete_entry(old_de, old_page);
 
@@ -440,9 +437,10 @@ static struct dentry *nilfs_get_parent(struct dentry *child)
 {
 	unsigned long ino;
 	struct inode *inode;
+	struct qstr dotdot = QSTR_INIT("..", 2);
 	struct nilfs_root *root;
 
-	ino = nilfs_inode_by_name(d_inode(child), &dotdot_name);
+	ino = nilfs_inode_by_name(d_inode(child), &dotdot);
 	if (!ino)
 		return ERR_PTR(-ENOENT);
 
@@ -551,8 +549,6 @@ const struct inode_operations nilfs_dir_inode_operations = {
 	.setattr	= nilfs_setattr,
 	.permission	= nilfs_permission,
 	.fiemap		= nilfs_fiemap,
-	.fileattr_get	= nilfs_fileattr_get,
-	.fileattr_set	= nilfs_fileattr_set,
 };
 
 const struct inode_operations nilfs_special_inode_operations = {

@@ -16,6 +16,7 @@
 #include <linux/utsname.h>
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
+#include <stdarg.h>
 
 int snd_info_check_reserved_words(const char *str)
 {
@@ -56,7 +57,7 @@ struct snd_info_private_data {
 };
 
 static int snd_info_version_init(void);
-static void snd_info_clear_entries(struct snd_info_entry *entry);
+static void snd_info_disconnect(struct snd_info_entry *entry);
 
 /*
 
@@ -234,7 +235,7 @@ static int snd_info_entry_mmap(struct file *file, struct vm_area_struct *vma)
 
 static int snd_info_entry_open(struct inode *inode, struct file *file)
 {
-	struct snd_info_entry *entry = pde_data(inode);
+	struct snd_info_entry *entry = PDE_DATA(inode);
 	struct snd_info_private_data *data;
 	int mode, err;
 
@@ -365,7 +366,7 @@ static int snd_info_seq_show(struct seq_file *seq, void *p)
 
 static int snd_info_text_entry_open(struct inode *inode, struct file *file)
 {
-	struct snd_info_entry *entry = pde_data(inode);
+	struct snd_info_entry *entry = PDE_DATA(inode);
 	struct snd_info_private_data *data;
 	int err;
 
@@ -569,16 +570,11 @@ void snd_info_card_disconnect(struct snd_card *card)
 {
 	if (!card)
 		return;
-
-	proc_remove(card->proc_root_link);
-	if (card->proc_root)
-		proc_remove(card->proc_root->p);
-
 	mutex_lock(&info_mutex);
-	if (card->proc_root)
-		snd_info_clear_entries(card->proc_root);
+	proc_remove(card->proc_root_link);
 	card->proc_root_link = NULL;
-	card->proc_root = NULL;
+	if (card->proc_root)
+		snd_info_disconnect(card->proc_root);
 	mutex_unlock(&info_mutex);
 }
 
@@ -750,14 +746,15 @@ struct snd_info_entry *snd_info_create_card_entry(struct snd_card *card,
 }
 EXPORT_SYMBOL(snd_info_create_card_entry);
 
-static void snd_info_clear_entries(struct snd_info_entry *entry)
+static void snd_info_disconnect(struct snd_info_entry *entry)
 {
 	struct snd_info_entry *p;
 
 	if (!entry->p)
 		return;
 	list_for_each_entry(p, &entry->children, list)
-		snd_info_clear_entries(p);
+		snd_info_disconnect(p);
+	proc_remove(entry->p);
 	entry->p = NULL;
 }
 
@@ -774,9 +771,8 @@ void snd_info_free_entry(struct snd_info_entry * entry)
 	if (!entry)
 		return;
 	if (entry->p) {
-		proc_remove(entry->p);
 		mutex_lock(&info_mutex);
-		snd_info_clear_entries(entry);
+		snd_info_disconnect(entry);
 		mutex_unlock(&info_mutex);
 	}
 
@@ -873,8 +869,6 @@ EXPORT_SYMBOL(snd_info_register);
  *
  * This proc file entry will be registered via snd_card_register() call, and
  * it will be removed automatically at the card removal, too.
- *
- * Return: zero if successful, or a negative error code
  */
 int snd_card_rw_proc_new(struct snd_card *card, const char *name,
 			 void *private_data,

@@ -117,7 +117,7 @@ static s32 ixgbe_setup_sfp_modules_82599(struct ixgbe_hw *hw)
 		ret_val = hw->mac.ops.acquire_swfw_sync(hw,
 							IXGBE_GSSR_MAC_CSR_SM);
 		if (ret_val)
-			return -EBUSY;
+			return IXGBE_ERR_SWFW_SYNC;
 
 		if (hw->eeprom.ops.read(hw, ++data_offset, &data_value))
 			goto setup_sfp_err;
@@ -144,7 +144,7 @@ static s32 ixgbe_setup_sfp_modules_82599(struct ixgbe_hw *hw)
 
 		if (ret_val) {
 			hw_dbg(hw, " sfp module setup not complete\n");
-			return -EIO;
+			return IXGBE_ERR_SFP_SETUP_NOT_COMPLETE;
 		}
 	}
 
@@ -159,7 +159,7 @@ setup_sfp_err:
 	usleep_range(hw->eeprom.semaphore_delay * 1000,
 		     hw->eeprom.semaphore_delay * 2000);
 	hw_err(hw, "eeprom read at offset %d failed\n", data_offset);
-	return -EIO;
+	return IXGBE_ERR_SFP_SETUP_NOT_COMPLETE;
 }
 
 /**
@@ -184,7 +184,7 @@ static s32 prot_autoc_read_82599(struct ixgbe_hw *hw, bool *locked,
 		ret_val = hw->mac.ops.acquire_swfw_sync(hw,
 					IXGBE_GSSR_MAC_CSR_SM);
 		if (ret_val)
-			return -EBUSY;
+			return IXGBE_ERR_SWFW_SYNC;
 
 		*locked = true;
 	}
@@ -219,7 +219,7 @@ static s32 prot_autoc_write_82599(struct ixgbe_hw *hw, u32 autoc, bool locked)
 		ret_val = hw->mac.ops.acquire_swfw_sync(hw,
 					IXGBE_GSSR_MAC_CSR_SM);
 		if (ret_val)
-			return -EBUSY;
+			return IXGBE_ERR_SWFW_SYNC;
 
 		locked = true;
 	}
@@ -400,7 +400,7 @@ static s32 ixgbe_get_link_capabilities_82599(struct ixgbe_hw *hw,
 		break;
 
 	default:
-		return -EIO;
+		return IXGBE_ERR_LINK_SETUP;
 	}
 
 	if (hw->phy.multispeed_fiber) {
@@ -541,7 +541,7 @@ static s32 ixgbe_start_mac_link_82599(struct ixgbe_hw *hw,
 				msleep(100);
 			}
 			if (!(links_reg & IXGBE_LINKS_KX_AN_COMP)) {
-				status = -EIO;
+				status = IXGBE_ERR_AUTONEG_NOT_COMPLETE;
 				hw_dbg(hw, "Autoneg did not complete.\n");
 			}
 		}
@@ -794,7 +794,7 @@ static s32 ixgbe_setup_mac_link_82599(struct ixgbe_hw *hw,
 	speed &= link_capabilities;
 
 	if (speed == IXGBE_LINK_SPEED_UNKNOWN)
-		return -EINVAL;
+		return IXGBE_ERR_LINK_SETUP;
 
 	/* Use stored value (EEPROM defaults) of AUTOC to find KR/KX4 support*/
 	if (hw->mac.orig_link_settings_stored)
@@ -861,7 +861,8 @@ static s32 ixgbe_setup_mac_link_82599(struct ixgbe_hw *hw,
 					msleep(100);
 				}
 				if (!(links_reg & IXGBE_LINKS_KX_AN_COMP)) {
-					status = -EIO;
+					status =
+						IXGBE_ERR_AUTONEG_NOT_COMPLETE;
 					hw_dbg(hw, "Autoneg did not complete.\n");
 				}
 			}
@@ -926,7 +927,7 @@ static s32 ixgbe_reset_hw_82599(struct ixgbe_hw *hw)
 	/* Identify PHY and related function pointers */
 	status = hw->phy.ops.init(hw);
 
-	if (status == -EOPNOTSUPP)
+	if (status == IXGBE_ERR_SFP_NOT_SUPPORTED)
 		return status;
 
 	/* Setup SFP module if there is one present. */
@@ -935,7 +936,7 @@ static s32 ixgbe_reset_hw_82599(struct ixgbe_hw *hw)
 		hw->phy.sfp_setup_needed = false;
 	}
 
-	if (status == -EOPNOTSUPP)
+	if (status == IXGBE_ERR_SFP_NOT_SUPPORTED)
 		return status;
 
 	/* Reset PHY */
@@ -973,7 +974,7 @@ mac_reset_top:
 	}
 
 	if (ctrl & IXGBE_CTRL_RST_MASK) {
-		status = -EIO;
+		status = IXGBE_ERR_RESET_FAILED;
 		hw_dbg(hw, "Reset polling failed to complete.\n");
 	}
 
@@ -1092,7 +1093,7 @@ static s32 ixgbe_fdir_check_cmd_complete(struct ixgbe_hw *hw, u32 *fdircmd)
 		udelay(10);
 	}
 
-	return -EIO;
+	return IXGBE_ERR_FDIR_CMD_INCOMPLETE;
 }
 
 /**
@@ -1154,7 +1155,7 @@ s32 ixgbe_reinit_fdir_tables_82599(struct ixgbe_hw *hw)
 	}
 	if (i >= IXGBE_FDIR_INIT_DONE_POLL) {
 		hw_dbg(hw, "Flow Director Signature poll time exceeded!\n");
-		return -EIO;
+		return IXGBE_ERR_FDIR_REINIT_FAILED;
 	}
 
 	/* Clear FDIR statistics registers (read to clear) */
@@ -1350,7 +1351,7 @@ static u32 ixgbe_atr_compute_sig_hash_82599(union ixgbe_atr_hash_dword input,
 }
 
 /**
- *  ixgbe_fdir_add_signature_filter_82599 - Adds a signature hash filter
+ *  ixgbe_atr_add_signature_filter_82599 - Adds a signature hash filter
  *  @hw: pointer to hardware structure
  *  @input: unique input dword
  *  @common: compressed common input dword
@@ -1386,7 +1387,7 @@ s32 ixgbe_fdir_add_signature_filter_82599(struct ixgbe_hw *hw,
 		break;
 	default:
 		hw_dbg(hw, " Error on flow type input\n");
-		return -EIO;
+		return IXGBE_ERR_CONFIG;
 	}
 
 	/* configure FDIRCMD register */
@@ -1513,7 +1514,8 @@ static u32 ixgbe_get_fdirtcpm_82599(union ixgbe_atr_input *input_mask)
 #define IXGBE_WRITE_REG_BE32(a, reg, value) \
 	IXGBE_WRITE_REG((a), (reg), IXGBE_STORE_AS_BE32(ntohl(value)))
 
-#define IXGBE_STORE_AS_BE16(_value) __swab16(ntohs((_value)))
+#define IXGBE_STORE_AS_BE16(_value) \
+	ntohs(((u16)(_value) >> 8) | ((u16)(_value) << 8))
 
 s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 				    union ixgbe_atr_input *input_mask)
@@ -1540,12 +1542,11 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 	switch (input_mask->formatted.vm_pool & 0x7F) {
 	case 0x0:
 		fdirm |= IXGBE_FDIRM_POOL;
-		break;
 	case 0x7F:
 		break;
 	default:
 		hw_dbg(hw, " Error on vm pool mask\n");
-		return -EIO;
+		return IXGBE_ERR_CONFIG;
 	}
 
 	switch (input_mask->formatted.flow_type & IXGBE_ATR_L4TYPE_MASK) {
@@ -1554,14 +1555,13 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 		if (input_mask->formatted.dst_port ||
 		    input_mask->formatted.src_port) {
 			hw_dbg(hw, " Error on src/dst port mask\n");
-			return -EIO;
+			return IXGBE_ERR_CONFIG;
 		}
-		break;
 	case IXGBE_ATR_L4TYPE_MASK:
 		break;
 	default:
 		hw_dbg(hw, " Error on flow type mask\n");
-		return -EIO;
+		return IXGBE_ERR_CONFIG;
 	}
 
 	switch (ntohs(input_mask->formatted.vlan_id) & 0xEFFF) {
@@ -1582,7 +1582,7 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 		break;
 	default:
 		hw_dbg(hw, " Error on VLAN mask\n");
-		return -EIO;
+		return IXGBE_ERR_CONFIG;
 	}
 
 	switch ((__force u16)input_mask->formatted.flex_bytes & 0xFFFF) {
@@ -1594,7 +1594,7 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 		break;
 	default:
 		hw_dbg(hw, " Error on flexible byte mask\n");
-		return -EIO;
+		return IXGBE_ERR_CONFIG;
 	}
 
 	/* Now mask VM pool and destination IPv6 - bits 5 and 2 */
@@ -1649,13 +1649,13 @@ s32 ixgbe_fdir_write_perfect_filter_82599(struct ixgbe_hw *hw,
 	IXGBE_WRITE_REG_BE32(hw, IXGBE_FDIRIPDA, input->formatted.dst_ip[0]);
 
 	/* record source and destination port (little-endian)*/
-	fdirport = be16_to_cpu(input->formatted.dst_port);
+	fdirport = ntohs(input->formatted.dst_port);
 	fdirport <<= IXGBE_FDIRPORT_DESTINATION_SHIFT;
-	fdirport |= be16_to_cpu(input->formatted.src_port);
+	fdirport |= ntohs(input->formatted.src_port);
 	IXGBE_WRITE_REG(hw, IXGBE_FDIRPORT, fdirport);
 
 	/* record vlan (little-endian) and flex_bytes(big-endian) */
-	fdirvlan = IXGBE_STORE_AS_BE16(input->formatted.flex_bytes);
+	fdirvlan = IXGBE_STORE_AS_BE16((__force u16)input->formatted.flex_bytes);
 	fdirvlan <<= IXGBE_FDIRVLAN_FLEX_SHIFT;
 	fdirvlan |= ntohs(input->formatted.vlan_id);
 	IXGBE_WRITE_REG(hw, IXGBE_FDIRVLAN, fdirvlan);
@@ -1823,7 +1823,7 @@ static s32 ixgbe_identify_phy_82599(struct ixgbe_hw *hw)
 
 	/* Return error if SFP module has been detected but is not supported */
 	if (hw->phy.type == ixgbe_phy_sfp_unsupported)
-		return -EOPNOTSUPP;
+		return IXGBE_ERR_SFP_NOT_SUPPORTED;
 
 	return status;
 }
@@ -1862,13 +1862,13 @@ static s32 ixgbe_enable_rx_dma_82599(struct ixgbe_hw *hw, u32 regval)
  *  Verifies that installed the firmware version is 0.6 or higher
  *  for SFI devices. All 82599 SFI devices should have version 0.6 or higher.
  *
- *  Return: -EACCES if the FW is not present or if the FW version is
- *  not supported.
+ *  Returns IXGBE_ERR_EEPROM_VERSION if the FW is not present or
+ *  if the FW version is not supported.
  **/
 static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 {
+	s32 status = IXGBE_ERR_EEPROM_VERSION;
 	u16 fw_offset, fw_ptp_cfg_offset;
-	s32 status = -EACCES;
 	u16 offset;
 	u16 fw_version = 0;
 
@@ -1882,7 +1882,7 @@ static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 		goto fw_version_err;
 
 	if (fw_offset == 0 || fw_offset == 0xFFFF)
-		return -EACCES;
+		return IXGBE_ERR_EEPROM_VERSION;
 
 	/* get the offset to the Pass Through Patch Configuration block */
 	offset = fw_offset + IXGBE_FW_PASSTHROUGH_PATCH_CONFIG_PTR;
@@ -1890,7 +1890,7 @@ static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 		goto fw_version_err;
 
 	if (fw_ptp_cfg_offset == 0 || fw_ptp_cfg_offset == 0xFFFF)
-		return -EACCES;
+		return IXGBE_ERR_EEPROM_VERSION;
 
 	/* get the firmware version */
 	offset = fw_ptp_cfg_offset + IXGBE_FW_PATCH_VERSION_4;
@@ -1904,7 +1904,7 @@ static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 
 fw_version_err:
 	hw_err(hw, "eeprom read at offset %d failed\n", offset);
-	return -EACCES;
+	return IXGBE_ERR_EEPROM_VERSION;
 }
 
 /**
@@ -2037,7 +2037,7 @@ static s32 ixgbe_reset_pipeline_82599(struct ixgbe_hw *hw)
 
 	if (!(anlp1_reg & IXGBE_ANLP1_AN_STATE_MASK)) {
 		hw_dbg(hw, "auto negotiation not completed\n");
-		ret_val = -EIO;
+		ret_val = IXGBE_ERR_RESET_FAILED;
 		goto reset_pipeline_out;
 	}
 
@@ -2086,7 +2086,7 @@ static s32 ixgbe_read_i2c_byte_82599(struct ixgbe_hw *hw, u8 byte_offset,
 
 		if (!timeout) {
 			hw_dbg(hw, "Driver can't access resource, acquiring I2C bus timeout.\n");
-			status = -EIO;
+			status = IXGBE_ERR_I2C;
 			goto release_i2c_access;
 		}
 	}
@@ -2140,7 +2140,7 @@ static s32 ixgbe_write_i2c_byte_82599(struct ixgbe_hw *hw, u8 byte_offset,
 
 		if (!timeout) {
 			hw_dbg(hw, "Driver can't access resource, acquiring I2C bus timeout.\n");
-			status = -EIO;
+			status = IXGBE_ERR_I2C;
 			goto release_i2c_access;
 		}
 	}

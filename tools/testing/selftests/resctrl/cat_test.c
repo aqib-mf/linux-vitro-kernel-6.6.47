@@ -17,19 +17,30 @@
 #define MAX_DIFF_PERCENT	4
 #define MAX_DIFF		1000000
 
+static int count_of_bits;
+static char cbm_mask[256];
+static unsigned long long_mask;
+static unsigned long cache_size;
+
 /*
  * Change schemata. Write schemata to specified
  * con_mon grp, mon_grp in resctrl FS.
  * Run 5 times in order to get average values.
  */
-static int cat_setup(struct resctrl_val_param *p)
+static int cat_setup(int num, ...)
 {
+	struct resctrl_val_param *p;
 	char schemata[64];
+	va_list param;
 	int ret = 0;
+
+	va_start(param, num);
+	p = va_arg(param, struct resctrl_val_param *);
+	va_end(param);
 
 	/* Run NUM_OF_RUNS times */
 	if (p->num_of_runs >= NUM_OF_RUNS)
-		return END_OF_TESTS;
+		return -1;
 
 	if (p->num_of_runs == 0) {
 		sprintf(schemata, "%lx", p->mask);
@@ -41,17 +52,38 @@ static int cat_setup(struct resctrl_val_param *p)
 	return ret;
 }
 
-static int check_results(struct resctrl_val_param *param, size_t span)
+static void show_cache_info(unsigned long sum_llc_perf_miss, int no_of_bits,
+			    unsigned long span)
+{
+	unsigned long allocated_cache_lines = span / 64;
+	unsigned long avg_llc_perf_miss = 0;
+	float diff_percent;
+
+	avg_llc_perf_miss = sum_llc_perf_miss / (NUM_OF_RUNS - 1);
+	diff_percent = ((float)allocated_cache_lines - avg_llc_perf_miss) /
+				allocated_cache_lines * 100;
+
+	printf("%sok CAT: cache miss rate within %d%%\n",
+	       !is_amd && abs((int)diff_percent) > MAX_DIFF_PERCENT ?
+	       "not " : "", MAX_DIFF_PERCENT);
+	tests_run++;
+	printf("# Percent diff=%d\n", abs((int)diff_percent));
+	printf("# Number of bits: %d\n", no_of_bits);
+	printf("# Avg_llc_perf_miss: %lu\n", avg_llc_perf_miss);
+	printf("# Allocated cache lines: %lu\n", allocated_cache_lines);
+}
+
+static int check_results(struct resctrl_val_param *param)
 {
 	char *token_array[8], temp[512];
 	unsigned long sum_llc_perf_miss = 0;
 	int runs = 0, no_of_bits = 0;
 	FILE *fp;
 
-	ksft_print_msg("Checking for pass/fail\n");
+	printf("# Checking for pass/fail\n");
 	fp = fopen(param->filename, "r");
 	if (!fp) {
-		ksft_perror("Cannot open file");
+		perror("# Cannot open file");
 
 		return errno;
 	}
@@ -76,9 +108,9 @@ static int check_results(struct resctrl_val_param *param, size_t span)
 	fclose(fp);
 	no_of_bits = count_bits(param->mask);
 
-	return show_cache_info(sum_llc_perf_miss, no_of_bits, span / 64,
-			       MAX_DIFF, MAX_DIFF_PERCENT, runs - 1,
-			       get_vendor() == ARCH_INTEL, false);
+	show_cache_info(sum_llc_perf_miss, no_of_bits, param->span);
+
+	return 0;
 }
 
 void cat_test_cleanup(void)
@@ -91,12 +123,17 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 {
 	unsigned long l_mask, l_mask_1;
 	int ret, pipefd[2], sibling_cpu_no;
-	unsigned long cache_size = 0;
-	unsigned long long_mask;
-	char cbm_mask[256];
-	int count_of_bits;
 	char pipe_message;
-	size_t span;
+	pid_t bm_pid;
+
+	cache_size = 0;
+
+	ret = remount_resctrlfs(true);
+	if (ret)
+		return ret;
+
+	if (!validate_resctrl_feature_request("cat"))
+		return -1;
 
 	/* Get default cbm mask for L3/L2 cache */
 	ret = get_cbm_mask(cache_type, cbm_mask);
@@ -109,18 +146,15 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 	ret = get_cache_size(cpu_no, cache_type, &cache_size);
 	if (ret)
 		return ret;
-	ksft_print_msg("Cache size :%lu\n", cache_size);
+	printf("cache size :%lu\n", cache_size);
 
 	/* Get max number of bits from default-cabm mask */
 	count_of_bits = count_bits(long_mask);
 
-	if (!n)
-		n = count_of_bits / 2;
-
-	if (n > count_of_bits - 1) {
-		ksft_print_msg("Invalid input value for no_of_bits n!\n");
-		ksft_print_msg("Please enter value in range 1 to %d\n",
-			       count_of_bits - 1);
+	if (n < 1 || n > count_of_bits - 1) {
+		printf("Invalid input value for no_of_bits n!\n");
+		printf("Please Enter value in range 1 to %d\n",
+		       count_of_bits - 1);
 		return -1;
 	}
 
@@ -132,6 +166,7 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 	struct resctrl_val_param param = {
 		.resctrl_val	= CAT_STR,
 		.cpu_no		= cpu_no,
+		.mum_resctrlfs	= 0,
 		.setup		= cat_setup,
 	};
 
@@ -141,7 +176,7 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 	/* Set param values for parent thread which will be allocated bitmask
 	 * with (max_bits - n) bits
 	 */
-	span = cache_size * (count_of_bits - n) / count_of_bits;
+	param.span = cache_size * (count_of_bits - n) / count_of_bits;
 	strcpy(param.ctrlgrp, "c2");
 	strcpy(param.mongrp, "m2");
 	strcpy(param.filename, RESULT_FILE_NAME2);
@@ -149,11 +184,10 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 	param.num_of_runs = 0;
 
 	if (pipe(pipefd)) {
-		ksft_perror("Unable to create pipe");
+		perror("# Unable to create pipe");
 		return errno;
 	}
 
-	fflush(stdout);
 	bm_pid = fork();
 
 	/* Set param values for child thread which will be allocated bitmask
@@ -163,7 +197,7 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 		param.mask = l_mask_1;
 		strcpy(param.ctrlgrp, "c1");
 		strcpy(param.mongrp, "m1");
-		span = cache_size * n / count_of_bits;
+		param.span = cache_size * n / count_of_bits;
 		strcpy(param.filename, RESULT_FILE_NAME1);
 		param.num_of_runs = 0;
 		param.cpu_no = sibling_cpu_no;
@@ -171,21 +205,24 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 
 	remove(param.filename);
 
-	ret = cat_val(&param, span);
-	if (ret == 0)
-		ret = check_results(&param, span);
+	ret = cat_val(&param);
+	if (ret)
+		return ret;
+
+	ret = check_results(&param);
+	if (ret)
+		return ret;
 
 	if (bm_pid == 0) {
 		/* Tell parent that child is ready */
 		close(pipefd[0]);
 		pipe_message = 1;
 		if (write(pipefd[1], &pipe_message, sizeof(pipe_message)) <
-		    sizeof(pipe_message))
-			/*
-			 * Just print the error message.
-			 * Let while(1) run and wait for itself to be killed.
-			 */
-			ksft_perror("Failed signaling parent process");
+		    sizeof(pipe_message)) {
+			close(pipefd[1]);
+			perror("# failed signaling parent process");
+			return errno;
+		}
 
 		close(pipefd[1]);
 		while (1)
@@ -197,7 +234,7 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 		while (pipe_message != 1) {
 			if (read(pipefd[0], &pipe_message,
 				 sizeof(pipe_message)) < sizeof(pipe_message)) {
-				ksft_perror("Failed reading from child process");
+				perror("# failed reading from child process");
 				break;
 			}
 		}
@@ -206,6 +243,8 @@ int cat_perf_miss_val(int cpu_no, int n, char *cache_type)
 	}
 
 	cat_test_cleanup();
+	if (bm_pid)
+		umount_resctrlfs();
 
-	return ret;
+	return 0;
 }

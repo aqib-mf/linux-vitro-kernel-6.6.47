@@ -8,6 +8,7 @@
 #include "dpu_hw_catalog.h"
 #include "dpu_hw_mdss.h"
 #include "dpu_hw_util.h"
+#include "dpu_hw_blk.h"
 
 struct dpu_hw_mdp;
 
@@ -29,7 +30,7 @@ struct traffic_shaper_cfg {
 
 /**
  * struct split_pipe_cfg - pipe configuration for dual display panels
- * @en        : Enable/disable dual pipe configuration
+ * @en        : Enable/disable dual pipe confguration
  * @mode      : Panel interface mode
  * @intf      : Interface id for main control path
  * @split_flush_en: Allows both the paths to be flushed when master path is
@@ -75,7 +76,7 @@ struct dpu_vsync_source_cfg {
  * @setup_traffic_shaper : programs traffic shaper control
  */
 struct dpu_hw_mdp_ops {
-	/** setup_split_pipe() : Registers are not double buffered, thisk
+	/** setup_split_pipe() : Regsiters are not double buffered, thisk
 	 * function should be called before timing control enable
 	 * @mdp  : mdp top context driver
 	 * @cfg  : upper and lower part of pipe configuration
@@ -137,6 +138,7 @@ struct dpu_hw_mdp {
 	struct dpu_hw_blk_reg_map hw;
 
 	/* top */
+	enum dpu_mdp idx;
 	const struct dpu_mdp_cfg *caps;
 
 	/* ops */
@@ -144,12 +146,12 @@ struct dpu_hw_mdp {
 };
 
 /**
- * dpu_hw_mdptop_init - initializes the top driver for the passed config
- * @cfg:  MDP TOP configuration from catalog
+ * dpu_hw_mdptop_init - initializes the top driver for the passed idx
+ * @idx:  Interface index for which driver object is required
  * @addr: Mapped register io address of MDP
  * @m:    Pointer to mdss catalog data
  */
-struct dpu_hw_mdp *dpu_hw_mdptop_init(const struct dpu_mdp_cfg *cfg,
+struct dpu_hw_mdp *dpu_hw_mdptop_init(enum dpu_mdp idx,
 		void __iomem *addr,
 		const struct dpu_mdss_cfg *m);
 

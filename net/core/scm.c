@@ -26,7 +26,6 @@
 #include <linux/nsproxy.h>
 #include <linux/slab.h>
 #include <linux/errqueue.h>
-#include <linux/io_uring.h>
 
 #include <linux/uaccess.h>
 
@@ -80,7 +79,7 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 
 	if (!fpl)
 	{
-		fpl = kmalloc(sizeof(struct scm_fp_list), GFP_KERNEL_ACCOUNT);
+		fpl = kmalloc(sizeof(struct scm_fp_list), GFP_KERNEL);
 		if (!fpl)
 			return -ENOMEM;
 		*fplp = fpl;
@@ -104,11 +103,6 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 
 		if (fd < 0 || !(file = fget_raw(fd)))
 			return -EBADF;
-		/* don't allow io_uring files */
-		if (io_is_uring_fops(file)) {
-			fput(file);
-			return -EINVAL;
-		}
 		*fpp++ = file;
 		fpl->count++;
 	}
@@ -136,7 +130,6 @@ EXPORT_SYMBOL(__scm_destroy);
 
 int __scm_send(struct socket *sock, struct msghdr *msg, struct scm_cookie *p)
 {
-	const struct proto_ops *ops = READ_ONCE(sock->ops);
 	struct cmsghdr *cmsg;
 	int err;
 
@@ -160,7 +153,7 @@ int __scm_send(struct socket *sock, struct msghdr *msg, struct scm_cookie *p)
 		switch (cmsg->cmsg_type)
 		{
 		case SCM_RIGHTS:
-			if (!ops || ops->family != PF_UNIX)
+			if (!sock->ops || sock->ops->family != PF_UNIX)
 				goto error;
 			err=scm_fp_copy(cmsg, &p->fp);
 			if (err<0)
@@ -235,18 +228,14 @@ int put_cmsg(struct msghdr * msg, int level, int type, int len, void *data)
 
 	if (msg->msg_control_is_user) {
 		struct cmsghdr __user *cm = msg->msg_control_user;
+		struct cmsghdr cmhdr;
 
-		check_object_size(data, cmlen - sizeof(*cm), true);
-
-		if (!user_write_access_begin(cm, cmlen))
-			goto efault;
-
-		unsafe_put_user(cmlen, &cm->cmsg_len, efault_end);
-		unsafe_put_user(level, &cm->cmsg_level, efault_end);
-		unsafe_put_user(type, &cm->cmsg_type, efault_end);
-		unsafe_copy_to_user(CMSG_USER_DATA(cm), data,
-				    cmlen - sizeof(*cm), efault_end);
-		user_write_access_end();
+		cmhdr.cmsg_level = level;
+		cmhdr.cmsg_type = type;
+		cmhdr.cmsg_len = cmlen;
+		if (copy_to_user(cm, &cmhdr, sizeof cmhdr) ||
+		    copy_to_user(CMSG_USER_DATA(cm), data, cmlen - sizeof(*cm)))
+			return -EFAULT;
 	} else {
 		struct cmsghdr *cm = msg->msg_control;
 
@@ -257,17 +246,9 @@ int put_cmsg(struct msghdr * msg, int level, int type, int len, void *data)
 	}
 
 	cmlen = min(CMSG_SPACE(len), msg->msg_controllen);
-	if (msg->msg_control_is_user)
-		msg->msg_control_user += cmlen;
-	else
-		msg->msg_control += cmlen;
+	msg->msg_control += cmlen;
 	msg->msg_controllen -= cmlen;
 	return 0;
-
-efault_end:
-	user_write_access_end();
-efault:
-	return -EFAULT;
 }
 EXPORT_SYMBOL(put_cmsg);
 
@@ -309,7 +290,7 @@ static int scm_max_fds(struct msghdr *msg)
 void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 {
 	struct cmsghdr __user *cm =
-		(__force struct cmsghdr __user *)msg->msg_control_user;
+		(__force struct cmsghdr __user *)msg->msg_control;
 	unsigned int o_flags = (msg->msg_flags & MSG_CMSG_CLOEXEC) ? O_CLOEXEC : 0;
 	int fdmax = min_t(int, scm_max_fds(msg), scm->fp->count);
 	int __user *cmsg_data = CMSG_USER_DATA(cm);
@@ -342,7 +323,7 @@ void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 			cmlen = CMSG_SPACE(i * sizeof(int));
 			if (msg->msg_controllen < cmlen)
 				cmlen = msg->msg_controllen;
-			msg->msg_control_user += cmlen;
+			msg->msg_control += cmlen;
 			msg->msg_controllen -= cmlen;
 		}
 	}
@@ -367,7 +348,7 @@ struct scm_fp_list *scm_fp_dup(struct scm_fp_list *fpl)
 		return NULL;
 
 	new_fpl = kmemdup(fpl, offsetof(struct scm_fp_list, fp[fpl->count]),
-			  GFP_KERNEL_ACCOUNT);
+			  GFP_KERNEL);
 	if (new_fpl) {
 		for (i = 0; i < fpl->count; i++)
 			get_file(fpl->fp[i]);

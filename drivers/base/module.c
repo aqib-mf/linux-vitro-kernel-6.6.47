@@ -7,7 +7,6 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/rcupdate.h>
 #include "base.h"
 
 static char *make_driver_name(struct device_driver *drv)
@@ -31,14 +30,14 @@ static void module_create_drivers_dir(struct module_kobject *mk)
 	mutex_unlock(&drivers_dir_mutex);
 }
 
-int module_add_driver(struct module *mod, struct device_driver *drv)
+void module_add_driver(struct module *mod, struct device_driver *drv)
 {
 	char *driver_name;
+	int no_warn;
 	struct module_kobject *mk = NULL;
-	int ret;
 
 	if (!drv)
-		return 0;
+		return;
 
 	if (mod)
 		mk = &mod->mkobj;
@@ -57,37 +56,17 @@ int module_add_driver(struct module *mod, struct device_driver *drv)
 	}
 
 	if (!mk)
-		return 0;
+		return;
 
-	ret = sysfs_create_link(&drv->p->kobj, &mk->kobj, "module");
-	if (ret)
-		return ret;
-
+	/* Don't check return codes; these calls are idempotent */
+	no_warn = sysfs_create_link(&drv->p->kobj, &mk->kobj, "module");
 	driver_name = make_driver_name(drv);
-	if (!driver_name) {
-		ret = -ENOMEM;
-		goto out;
+	if (driver_name) {
+		module_create_drivers_dir(mk);
+		no_warn = sysfs_create_link(mk->drivers_dir, &drv->p->kobj,
+					    driver_name);
+		kfree(driver_name);
 	}
-
-	module_create_drivers_dir(mk);
-	if (!mk->drivers_dir) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	ret = sysfs_create_link(mk->drivers_dir, &drv->p->kobj, driver_name);
-	if (ret)
-		goto out;
-
-	kfree(driver_name);
-
-	return 0;
-out:
-	sysfs_remove_link(&drv->p->kobj, "module");
-	sysfs_remove_link(mk->drivers_dir, driver_name);
-	kfree(driver_name);
-
-	return ret;
 }
 
 void module_remove_driver(struct device_driver *drv)
@@ -97,9 +76,6 @@ void module_remove_driver(struct device_driver *drv)
 
 	if (!drv)
 		return;
-
-	/* Synchronize with dev_uevent() */
-	synchronize_rcu();
 
 	sysfs_remove_link(&drv->p->kobj, "module");
 

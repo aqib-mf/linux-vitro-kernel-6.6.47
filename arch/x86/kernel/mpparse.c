@@ -19,7 +19,6 @@
 #include <linux/smp.h>
 #include <linux/pci.h>
 
-#include <asm/i8259.h>
 #include <asm/io_apic.h>
 #include <asm/acpi.h>
 #include <asm/irqdomain.h>
@@ -48,6 +47,7 @@ static int __init mpf_checksum(unsigned char *mp, int len)
 
 static void __init MP_processor_info(struct mpc_cpu *m)
 {
+	int apicid;
 	char *bootup_cpu = "";
 
 	if (!(m->cpuflag & CPU_ENABLED)) {
@@ -55,11 +55,15 @@ static void __init MP_processor_info(struct mpc_cpu *m)
 		return;
 	}
 
-	if (m->cpuflag & CPU_BOOTPROCESSOR)
+	apicid = m->apicid;
+
+	if (m->cpuflag & CPU_BOOTPROCESSOR) {
 		bootup_cpu = " (Bootup-CPU)";
+		boot_cpu_physical_apicid = m->apicid;
+	}
 
 	pr_info("Processor #%d%s\n", m->apicid, bootup_cpu);
-	generic_processor_info(m->apicid);
+	generic_processor_info(apicid, m->apicver);
 }
 
 #ifdef CONFIG_X86_IO_APIC
@@ -247,7 +251,7 @@ static int __init ELCR_trigger(unsigned int irq)
 {
 	unsigned int port;
 
-	port = PIC_ELCR1 + (irq >> 3);
+	port = 0x4d0 + (irq >> 3);
 	return (inb(port) >> (irq & 7)) & 1;
 }
 
@@ -373,6 +377,11 @@ static inline void __init construct_default_ISA_mptable(int mpc_default_type)
 	struct mpc_lintsrc lintsrc;
 	int linttypes[2] = { mp_ExtINT, mp_NMI };
 	int i;
+
+	/*
+	 * local APIC has default address
+	 */
+	mp_lapic_addr = APIC_DEFAULT_PHYS_BASE;
 
 	/*
 	 * 2 CPUs, numbered 0 & 1.
@@ -515,8 +524,10 @@ void __init default_get_smp_config(unsigned int early)
 	 */
 	if (mpf->feature1) {
 		if (early) {
-			/* Local APIC has default address */
-			register_lapic_address(APIC_DEFAULT_PHYS_BASE);
+			/*
+			 * local APIC has default address
+			 */
+			mp_lapic_addr = APIC_DEFAULT_PHYS_BASE;
 			goto out;
 		}
 

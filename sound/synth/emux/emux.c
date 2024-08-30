@@ -104,8 +104,7 @@ int snd_emux_register(struct snd_emux *emu, struct snd_card *card, int index, ch
 	if (emu->sflist == NULL)
 		return -ENOMEM;
 
-	err = snd_emux_init_hwdep(emu);
-	if (err < 0)
+	if ((err = snd_emux_init_hwdep(emu)) < 0)
 		return err;
 
 	snd_emux_init_voices(emu);
@@ -126,10 +125,15 @@ EXPORT_SYMBOL(snd_emux_register);
  */
 int snd_emux_free(struct snd_emux *emu)
 {
+	unsigned long flags;
+
 	if (! emu)
 		return -EINVAL;
 
-	timer_shutdown_sync(&emu->tlist);
+	spin_lock_irqsave(&emu->voice_lock, flags);
+	if (emu->timer_active)
+		del_timer(&emu->tlist);
+	spin_unlock_irqrestore(&emu->voice_lock, flags);
 
 	snd_emux_proc_free(emu);
 	snd_emux_delete_virmidi(emu);

@@ -19,6 +19,7 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/pinctrl/consumer.h>
@@ -206,14 +207,18 @@ static int at91_twi_probe(struct platform_device *pdev)
 
 	dev->dev = &pdev->dev;
 
-	dev->base = devm_platform_get_and_ioremap_resource(pdev, 0, &mem);
-	if (IS_ERR(dev->base))
-		return PTR_ERR(dev->base);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!mem)
+		return -ENODEV;
 	phy_addr = mem->start;
 
 	dev->pdata = at91_twi_get_driver_data(pdev);
 	if (!dev->pdata)
 		return -ENODEV;
+
+	dev->base = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(dev->base))
+		return PTR_ERR(dev->base);
 
 	dev->irq = platform_get_irq(pdev, 0);
 	if (dev->irq < 0)
@@ -222,9 +227,10 @@ static int at91_twi_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, dev);
 
 	dev->clk = devm_clk_get(dev->dev, NULL);
-	if (IS_ERR(dev->clk))
-		return dev_err_probe(dev->dev, PTR_ERR(dev->clk), "no clock defined\n");
-
+	if (IS_ERR(dev->clk)) {
+		dev_err(dev->dev, "no clock defined\n");
+		return -ENODEV;
+	}
 	clk_prepare_enable(dev->clk);
 
 	snprintf(dev->adapter.name, sizeof(dev->adapter.name), "AT91");
@@ -267,7 +273,7 @@ static int at91_twi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void at91_twi_remove(struct platform_device *pdev)
+static int at91_twi_remove(struct platform_device *pdev)
 {
 	struct at91_twi_dev *dev = platform_get_drvdata(pdev);
 
@@ -276,9 +282,13 @@ static void at91_twi_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(dev->dev);
 	pm_runtime_set_suspended(dev->dev);
+
+	return 0;
 }
 
-static int __maybe_unused at91_twi_runtime_suspend(struct device *dev)
+#ifdef CONFIG_PM
+
+static int at91_twi_runtime_suspend(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 
@@ -289,7 +299,7 @@ static int __maybe_unused at91_twi_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_runtime_resume(struct device *dev)
+static int at91_twi_runtime_resume(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 
@@ -298,7 +308,7 @@ static int __maybe_unused at91_twi_runtime_resume(struct device *dev)
 	return clk_prepare_enable(twi_dev->clk);
 }
 
-static int __maybe_unused at91_twi_suspend_noirq(struct device *dev)
+static int at91_twi_suspend_noirq(struct device *dev)
 {
 	if (!pm_runtime_status_suspended(dev))
 		at91_twi_runtime_suspend(dev);
@@ -306,7 +316,7 @@ static int __maybe_unused at91_twi_suspend_noirq(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_resume_noirq(struct device *dev)
+static int at91_twi_resume_noirq(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 	int ret;
@@ -325,21 +335,26 @@ static int __maybe_unused at91_twi_resume_noirq(struct device *dev)
 	return 0;
 }
 
-static const struct dev_pm_ops __maybe_unused at91_twi_pm = {
+static const struct dev_pm_ops at91_twi_pm = {
 	.suspend_noirq	= at91_twi_suspend_noirq,
 	.resume_noirq	= at91_twi_resume_noirq,
 	.runtime_suspend	= at91_twi_runtime_suspend,
 	.runtime_resume		= at91_twi_runtime_resume,
 };
 
+#define at91_twi_pm_ops (&at91_twi_pm)
+#else
+#define at91_twi_pm_ops NULL
+#endif
+
 static struct platform_driver at91_twi_driver = {
 	.probe		= at91_twi_probe,
-	.remove_new	= at91_twi_remove,
+	.remove		= at91_twi_remove,
 	.id_table	= at91_twi_devtypes,
 	.driver		= {
 		.name	= "at91_i2c",
 		.of_match_table = of_match_ptr(atmel_twi_dt_ids),
-		.pm	= pm_ptr(&at91_twi_pm),
+		.pm	= at91_twi_pm_ops,
 	},
 };
 

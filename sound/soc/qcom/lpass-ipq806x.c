@@ -51,6 +51,7 @@ static struct snd_soc_dai_driver ipq806x_lpass_cpu_dai_driver = {
 		.channels_min	= 1,
 		.channels_max	= 8,
 	},
+	.probe	= &asoc_qcom_lpass_cpu_dai_probe,
 	.ops    = &asoc_qcom_lpass_cpu_dai_ops,
 };
 
@@ -160,7 +161,7 @@ static struct lpass_variant ipq806x_data = {
 	.free_dma_channel	= ipq806x_lpass_free_dma_channel,
 };
 
-static const struct of_device_id ipq806x_lpass_cpu_device_id[] __maybe_unused = {
+static const struct of_device_id ipq806x_lpass_cpu_device_id[] = {
 	{ .compatible = "qcom,lpass-cpu", .data = &ipq806x_data },
 	{}
 };

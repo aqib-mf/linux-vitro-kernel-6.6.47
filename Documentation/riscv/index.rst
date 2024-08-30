@@ -5,16 +5,9 @@ RISC-V architecture
 .. toctree::
     :maxdepth: 1
 
-    acpi
-    boot
     boot-image-header
-    vm-layout
-    hwprobe
+    pmu
     patch-acceptance
-    uabi
-    vector
-
-    features
 
 .. only::  subproject and html
 

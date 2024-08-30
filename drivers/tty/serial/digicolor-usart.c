@@ -136,7 +136,8 @@ static void digicolor_uart_rx(struct uart_port *port)
 	spin_lock_irqsave(&port->lock, flags);
 
 	while (1) {
-		u8 status, ch, ch_flag;
+		u8 status, ch;
+		unsigned int ch_flag;
 
 		if (digicolor_uart_rx_empty(port))
 			break;
@@ -201,7 +202,8 @@ static void digicolor_uart_tx(struct uart_port *port)
 
 	while (!uart_circ_empty(xmit)) {
 		writeb(xmit->buf[xmit->tail], port->membase + UA_EMI_REC);
-		uart_xmit_advance(port, 1);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
 
 		if (digicolor_uart_tx_full(port))
 			break;
@@ -285,7 +287,7 @@ static void digicolor_uart_shutdown(struct uart_port *port)
 
 static void digicolor_uart_set_termios(struct uart_port *port,
 				       struct ktermios *termios,
-				       const struct ktermios *old)
+				       struct ktermios *old)
 {
 	unsigned int baud, divisor;
 	u8 config = 0;
@@ -381,7 +383,7 @@ static const struct uart_ops digicolor_uart_ops = {
 	.request_port	= digicolor_uart_request_port,
 };
 
-static void digicolor_uart_console_putchar(struct uart_port *port, unsigned char ch)
+static void digicolor_uart_console_putchar(struct uart_port *port, int ch)
 {
 	while (digicolor_uart_tx_full(port))
 		cpu_relax();

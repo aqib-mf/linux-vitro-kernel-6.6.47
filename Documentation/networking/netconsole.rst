@@ -13,8 +13,6 @@ IPv6 support by Cong Wang <xiyou.wangcong@gmail.com>, Jan 1 2013
 
 Extended console support by Tejun Heo <tj@kernel.org>, May 1 2015
 
-Release prepend support by Breno Leitao <leitao@debian.org>, Jul 7 2023
-
 Please send bug reports to Matt Mackall <mpm@selenic.com>
 Satyam Sharma <satyam.sharma@gmail.com>, and Cong Wang <xiyou.wangcong@gmail.com>
 
@@ -36,11 +34,10 @@ Sender and receiver configuration:
 It takes a string configuration parameter "netconsole" in the
 following format::
 
- netconsole=[+][r][src-port]@[src-ip]/[<dev>],[tgt-port]@<tgt-ip>/[tgt-macaddr]
+ netconsole=[+][src-port]@[src-ip]/[<dev>],[tgt-port]@<tgt-ip>/[tgt-macaddr]
 
    where
 	+             if present, enable extended console support
-	r             if present, prepend kernel version (release) to the message
 	src-port      source for UDP packets (defaults to 6665)
 	src-ip        source IP to use (interface address)
 	dev           network interface (eth0)
@@ -128,7 +125,6 @@ The interface exposes these parameters of a netconsole target to userspace:
 	==============  =================================       ============
 	enabled		Is this target currently enabled?	(read-write)
 	extended	Extended mode enabled			(read-write)
-	release		Prepend kernel release to message	(read-write)
 	dev_name	Local network interface name		(read-write)
 	local_port	Source UDP port to use			(read-write)
 	remote_port	Remote agent's UDP port			(read-write)
@@ -169,14 +165,9 @@ following format which is the same as /dev/kmsg::
 
  <level>,<sequnum>,<timestamp>,<contflag>;<message text>
 
-If 'r' (release) feature is enabled, the kernel release version is
-prepended to the start of the message. Example::
-
- 6.4.0,6,444,501151268,-;netconsole: network logging started
-
 Non printable characters in <message text> are escaped using "\xff"
 notation. If the message contains optional dictionary, verbatim
-newline is used as the delimiter.
+newline is used as the delimeter.
 
 If a message doesn't fit in certain number of bytes (currently 1000),
 the message is split into multiple fragments by netconsole. These

@@ -125,12 +125,7 @@ struct cmos_rtc_board_info {
 #define RTC_IO_EXTENT_USED      RTC_IO_EXTENT
 #endif /* ARCH_RTC_LOCATION */
 
-bool mc146818_does_rtc_work(void);
-int mc146818_get_time(struct rtc_time *time, int timeout);
+unsigned int mc146818_get_time(struct rtc_time *time);
 int mc146818_set_time(struct rtc_time *time);
-
-bool mc146818_avoid_UIP(void (*callback)(unsigned char seconds, void *param),
-			int timeout,
-			void *param);
 
 #endif /* _MC146818RTC_H */

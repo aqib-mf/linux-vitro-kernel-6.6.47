@@ -17,6 +17,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -885,6 +886,7 @@ static int img_mdc_runtime_resume(struct device *dev)
 static int mdc_dma_probe(struct platform_device *pdev)
 {
 	struct mdc_dma *mdma;
+	struct resource *res;
 	unsigned int i;
 	u32 val;
 	int ret;
@@ -896,7 +898,8 @@ static int mdc_dma_probe(struct platform_device *pdev)
 
 	mdma->soc = of_device_get_match_data(&pdev->dev);
 
-	mdma->regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	mdma->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mdma->regs))
 		return PTR_ERR(mdma->regs);
 

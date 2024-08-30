@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * Authors:
  * (C) 2020 Alexander Aring <alex.aring@gmail.com>
  */
@@ -13,7 +13,7 @@
 #include <net/rpl.h>
 
 struct rpl_iptunnel_encap {
-	DECLARE_FLEX_ARRAY(struct ipv6_rpl_sr_hdr, srh);
+	struct ipv6_rpl_sr_hdr srh[0];
 };
 
 struct rpl_lwt {
@@ -190,13 +190,18 @@ static int rpl_do_srh(struct sk_buff *skb, const struct rpl_lwt *rlwt)
 {
 	struct dst_entry *dst = skb_dst(skb);
 	struct rpl_iptunnel_encap *tinfo;
+	int err = 0;
 
 	if (skb->protocol != htons(ETH_P_IPV6))
 		return -EINVAL;
 
 	tinfo = rpl_encap_lwtunnel(dst->lwtstate);
 
-	return rpl_do_srh_inline(skb, rlwt, tinfo->srh);
+	err = rpl_do_srh_inline(skb, rlwt, tinfo->srh);
+	if (err)
+		return err;
+
+	return 0;
 }
 
 static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
@@ -212,9 +217,9 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	if (unlikely(err))
 		goto drop;
 
-	local_bh_disable();
+	preempt_disable();
 	dst = dst_cache_get(&rlwt->cache);
-	local_bh_enable();
+	preempt_enable();
 
 	if (unlikely(!dst)) {
 		struct ipv6hdr *hdr = ipv6_hdr(skb);
@@ -234,9 +239,9 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 			goto drop;
 		}
 
-		local_bh_disable();
+		preempt_disable();
 		dst_cache_set_ip6(&rlwt->cache, dst, &fl6.saddr);
-		local_bh_enable();
+		preempt_enable();
 	}
 
 	skb_dst_drop(skb);
@@ -268,21 +273,24 @@ static int rpl_input(struct sk_buff *skb)
 		return err;
 	}
 
-	local_bh_disable();
+	preempt_disable();
 	dst = dst_cache_get(&rlwt->cache);
+	preempt_enable();
+
+	skb_dst_drop(skb);
 
 	if (!dst) {
 		ip6_route_input(skb);
 		dst = skb_dst(skb);
 		if (!dst->error) {
+			preempt_disable();
 			dst_cache_set_ip6(&rlwt->cache, dst,
 					  &ipv6_hdr(skb)->saddr);
+			preempt_enable();
 		}
 	} else {
-		skb_dst_drop(skb);
 		skb_dst_set(skb, dst);
 	}
-	local_bh_enable();
 
 	err = skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev));
 	if (unlikely(err))

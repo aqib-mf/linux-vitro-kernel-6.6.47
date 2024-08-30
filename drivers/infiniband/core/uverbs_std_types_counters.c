@@ -42,8 +42,9 @@ static int uverbs_free_counters(struct ib_uobject *uobject,
 	struct ib_counters *counters = uobject->object;
 	int ret;
 
-	if (atomic_read(&counters->usecnt))
-		return -EBUSY;
+	ret = ib_destroy_usecnt(&counters->usecnt, why, uobject);
+	if (ret)
+		return ret;
 
 	ret = counters->device->ops.destroy_counters(counters);
 	if (ret)
@@ -107,8 +108,6 @@ static int UVERBS_HANDLER(UVERBS_METHOD_COUNTERS_READ)(
 		return ret;
 
 	uattr = uverbs_attr_get(attrs, UVERBS_ATTR_READ_COUNTERS_BUFF);
-	if (IS_ERR(uattr))
-		return PTR_ERR(uattr);
 	read_attr.ncounters = uattr->ptr_attr.len / sizeof(u64);
 	read_attr.counters_buff = uverbs_zalloc(
 		attrs, array_size(read_attr.ncounters, sizeof(u64)));

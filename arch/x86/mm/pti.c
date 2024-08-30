@@ -217,7 +217,7 @@ static pmd_t *pti_user_pagetable_walk_pmd(unsigned long address)
 
 	pud = pud_offset(p4d, address);
 	/* The user page tables do not use large mappings: */
-	if (pud_leaf(*pud)) {
+	if (pud_large(*pud)) {
 		WARN_ON(1);
 		return NULL;
 	}
@@ -361,7 +361,7 @@ pti_clone_pgtable(unsigned long start, unsigned long end,
 			 * global, so set it as global in both copies.  Note:
 			 * the X86_FEATURE_PGE check is not _required_ because
 			 * the CPU ignores _PAGE_GLOBAL when PGE is not
-			 * supported.  The check keeps consistency with
+			 * supported.  The check keeps consistentency with
 			 * code that only set this bit when supported.
 			 */
 			if (boot_cpu_has(X86_FEATURE_PGE))
@@ -374,14 +374,14 @@ pti_clone_pgtable(unsigned long start, unsigned long end,
 			 */
 			*target_pmd = *pmd;
 
-			addr = round_up(addr + 1, PMD_SIZE);
+			addr += PMD_SIZE;
 
 		} else if (level == PTI_CLONE_PTE) {
 
 			/* Walk the page-table down to the pte level */
 			pte = pte_offset_kernel(pmd, addr);
 			if (pte_none(*pte)) {
-				addr = round_up(addr + 1, PAGE_SIZE);
+				addr += PAGE_SIZE;
 				continue;
 			}
 
@@ -401,7 +401,7 @@ pti_clone_pgtable(unsigned long start, unsigned long end,
 			/* Clone the PTE */
 			*target_pte = *pte;
 
-			addr = round_up(addr + 1, PAGE_SIZE);
+			addr += PAGE_SIZE;
 
 		} else {
 			BUG();
@@ -440,9 +440,10 @@ static void __init pti_clone_user_shared(void)
 
 	for_each_possible_cpu(cpu) {
 		/*
-		 * The SYSCALL64 entry code needs one word of scratch space
-		 * in which to spill a register.  It lives in the sp2 slot
-		 * of the CPU's TSS.
+		 * The SYSCALL64 entry code needs to be able to find the
+		 * thread stack and needs one word of scratch space in which
+		 * to spill a register.  All of this lives in the TSS, in
+		 * the sp1 and sp2 slots.
 		 *
 		 * This is done for all possible CPUs during boot to ensure
 		 * that it's propagated to all mms.
@@ -496,7 +497,7 @@ static void pti_clone_entry_text(void)
 {
 	pti_clone_pgtable((unsigned long) __entry_text_start,
 			  (unsigned long) __entry_text_end,
-			  PTI_LEVEL_KERNEL_IMAGE);
+			  PTI_CLONE_PMD);
 }
 
 /*
@@ -511,7 +512,7 @@ static void pti_clone_entry_text(void)
 static inline bool pti_kernel_image_global_ok(void)
 {
 	/*
-	 * Systems with PCIDs get little benefit from global
+	 * Systems with PCIDs get litlle benefit from global
 	 * kernel text and are not worth the downsides.
 	 */
 	if (cpu_feature_enabled(X86_FEATURE_PCID))
@@ -540,7 +541,7 @@ static inline bool pti_kernel_image_global_ok(void)
 	 * cases where RANDSTRUCT is in use to help keep the layout a
 	 * secret.
 	 */
-	if (IS_ENABLED(CONFIG_RANDSTRUCT))
+	if (IS_ENABLED(CONFIG_GCC_PLUGIN_RANDSTRUCT))
 		return false;
 
 	return true;
@@ -592,7 +593,7 @@ static void pti_set_kernel_image_nonglobal(void)
 	 * of the image.
 	 */
 	unsigned long start = PFN_ALIGN(_text);
-	unsigned long end = ALIGN((unsigned long)_end, PMD_SIZE);
+	unsigned long end = ALIGN((unsigned long)_end, PMD_PAGE_SIZE);
 
 	/*
 	 * This clears _PAGE_GLOBAL from the entire kernel image.

@@ -14,8 +14,6 @@
 #include "psp-dev.h"
 #include "sev-dev.h"
 #include "tee-dev.h"
-#include "platform-access.h"
-#include "dbc.h"
 
 struct psp_device *psp_master;
 
@@ -44,14 +42,17 @@ static irqreturn_t psp_irq_handler(int irq, void *data)
 	/* Read the interrupt status: */
 	status = ioread32(psp->io_regs + psp->vdata->intsts_reg);
 
-	/* Clear the interrupt status by writing the same value we read. */
-	iowrite32(status, psp->io_regs + psp->vdata->intsts_reg);
-
 	/* invoke subdevice interrupt handlers */
 	if (status) {
 		if (psp->sev_irq_handler)
 			psp->sev_irq_handler(irq, psp->sev_irq_data, status);
+
+		if (psp->tee_irq_handler)
+			psp->tee_irq_handler(irq, psp->tee_irq_data, status);
 	}
+
+	/* Clear the interrupt status by writing the same value we read. */
+	iowrite32(status, psp->io_regs + psp->vdata->intsts_reg);
 
 	return IRQ_HANDLED;
 }
@@ -69,23 +70,17 @@ static unsigned int psp_get_capability(struct psp_device *psp)
 	 */
 	if (val == 0xffffffff) {
 		dev_notice(psp->dev, "psp: unable to access the device: you might be running a broken BIOS.\n");
-		return -ENODEV;
+		return 0;
 	}
-	psp->capability = val;
 
-	/* Detect if TSME and SME are both enabled */
-	if (psp->capability & PSP_CAPABILITY_PSP_SECURITY_REPORTING &&
-	    psp->capability & (PSP_SECURITY_TSME_STATUS << PSP_CAPABILITY_PSP_SECURITY_OFFSET) &&
-	    cc_platform_has(CC_ATTR_HOST_MEM_ENCRYPT))
-		dev_notice(psp->dev, "psp: Both TSME and SME are active, SME is unnecessary when TSME is active.\n");
-
-	return 0;
+	return val;
 }
 
-static int psp_check_sev_support(struct psp_device *psp)
+static int psp_check_sev_support(struct psp_device *psp,
+				 unsigned int capability)
 {
 	/* Check if device supports SEV feature */
-	if (!(psp->capability & PSP_CAPABILITY_SEV)) {
+	if (!(capability & 1)) {
 		dev_dbg(psp->dev, "psp does not support SEV\n");
 		return -ENODEV;
 	}
@@ -93,10 +88,11 @@ static int psp_check_sev_support(struct psp_device *psp)
 	return 0;
 }
 
-static int psp_check_tee_support(struct psp_device *psp)
+static int psp_check_tee_support(struct psp_device *psp,
+				 unsigned int capability)
 {
 	/* Check if device supports TEE feature */
-	if (!(psp->capability & PSP_CAPABILITY_TEE)) {
+	if (!(capability & 2)) {
 		dev_dbg(psp->dev, "psp does not support TEE\n");
 		return -ENODEV;
 	}
@@ -104,41 +100,34 @@ static int psp_check_tee_support(struct psp_device *psp)
 	return 0;
 }
 
-static void psp_init_platform_access(struct psp_device *psp)
+static int psp_check_support(struct psp_device *psp,
+			     unsigned int capability)
 {
-	int ret;
+	int sev_support = psp_check_sev_support(psp, capability);
+	int tee_support = psp_check_tee_support(psp, capability);
 
-	ret = platform_access_dev_init(psp);
-	if (ret) {
-		dev_warn(psp->dev, "platform access init failed: %d\n", ret);
-		return;
-	}
+	/* Return error if device neither supports SEV nor TEE */
+	if (sev_support && tee_support)
+		return -ENODEV;
 
-	/* dbc must come after platform access as it tests the feature */
-	ret = dbc_dev_init(psp);
-	if (ret)
-		dev_warn(psp->dev, "failed to init dynamic boost control: %d\n",
-			 ret);
+	return 0;
 }
 
-static int psp_init(struct psp_device *psp)
+static int psp_init(struct psp_device *psp, unsigned int capability)
 {
 	int ret;
 
-	if (!psp_check_sev_support(psp)) {
+	if (!psp_check_sev_support(psp, capability)) {
 		ret = sev_dev_init(psp);
 		if (ret)
 			return ret;
 	}
 
-	if (!psp_check_tee_support(psp)) {
+	if (!psp_check_tee_support(psp, capability)) {
 		ret = tee_dev_init(psp);
 		if (ret)
 			return ret;
 	}
-
-	if (psp->vdata->platform_access)
-		psp_init_platform_access(psp);
 
 	return 0;
 }
@@ -147,6 +136,7 @@ int psp_dev_init(struct sp_device *sp)
 {
 	struct device *dev = sp->dev;
 	struct psp_device *psp;
+	unsigned int capability;
 	int ret;
 
 	ret = -ENOMEM;
@@ -165,7 +155,11 @@ int psp_dev_init(struct sp_device *sp)
 
 	psp->io_regs = sp->io_map;
 
-	ret = psp_get_capability(psp);
+	capability = psp_get_capability(psp);
+	if (!capability)
+		goto e_disable;
+
+	ret = psp_check_support(psp, capability);
 	if (ret)
 		goto e_disable;
 
@@ -180,13 +174,12 @@ int psp_dev_init(struct sp_device *sp)
 		goto e_err;
 	}
 
-	/* master device must be set for platform access */
-	if (psp->sp->set_psp_master_device)
-		psp->sp->set_psp_master_device(psp->sp);
-
-	ret = psp_init(psp);
+	ret = psp_init(psp, capability);
 	if (ret)
 		goto e_irq;
+
+	if (sp->set_psp_master_device)
+		sp->set_psp_master_device(sp);
 
 	/* Enable interrupt */
 	iowrite32(-1, psp->io_regs + psp->vdata->inten_reg);
@@ -196,9 +189,6 @@ int psp_dev_init(struct sp_device *sp)
 	return 0;
 
 e_irq:
-	if (sp->clear_psp_master_device)
-		sp->clear_psp_master_device(sp);
-
 	sp_free_psp_irq(psp->sp, psp);
 e_err:
 	sp->psp_data = NULL;
@@ -224,10 +214,6 @@ void psp_dev_destroy(struct sp_device *sp)
 
 	tee_dev_destroy(psp);
 
-	dbc_dev_destroy(psp);
-
-	platform_access_dev_destroy(psp);
-
 	sp_free_psp_irq(sp, psp);
 
 	if (sp->clear_psp_master_device)
@@ -244,6 +230,18 @@ void psp_set_sev_irq_handler(struct psp_device *psp, psp_irq_handler_t handler,
 void psp_clear_sev_irq_handler(struct psp_device *psp)
 {
 	psp_set_sev_irq_handler(psp, NULL, NULL);
+}
+
+void psp_set_tee_irq_handler(struct psp_device *psp, psp_irq_handler_t handler,
+			     void *data)
+{
+	psp->tee_irq_data = data;
+	psp->tee_irq_handler = handler;
+}
+
+void psp_clear_tee_irq_handler(struct psp_device *psp)
+{
+	psp_set_tee_irq_handler(psp, NULL, NULL);
 }
 
 struct psp_device *psp_get_master_device(void)

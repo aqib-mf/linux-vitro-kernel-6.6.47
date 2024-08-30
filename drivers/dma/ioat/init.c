@@ -15,6 +15,7 @@
 #include <linux/workqueue.h>
 #include <linux/prefetch.h>
 #include <linux/dca.h>
+#include <linux/aer.h>
 #include <linux/sizes.h>
 #include "dma.h"
 #include "registers.h"
@@ -420,7 +421,7 @@ int ioat_dma_setup_interrupts(struct ioatdma_device *ioat_dma)
 
 msix:
 	/* The number of MSI-X vectors should equal the number of channels */
-	msixcnt = ioat_dma->chancnt;
+	msixcnt = ioat_dma->dma_dev.chancnt;
 	for (i = 0; i < msixcnt; i++)
 		ioat_dma->msix_entries[i].entry = i;
 
@@ -511,7 +512,7 @@ static int ioat_probe(struct ioatdma_device *ioat_dma)
 	dma_cap_set(DMA_MEMCPY, dma->cap_mask);
 	dma->dev = &pdev->dev;
 
-	if (!ioat_dma->chancnt) {
+	if (!dma->chancnt) {
 		dev_err(dev, "channel enumeration error\n");
 		goto err_setup_interrupts;
 	}
@@ -531,6 +532,18 @@ err_self_test:
 err_setup_interrupts:
 	dma_pool_destroy(ioat_dma->completion_pool);
 err_out:
+	return err;
+}
+
+static int ioat_register(struct ioatdma_device *ioat_dma)
+{
+	int err = dma_async_device_register(&ioat_dma->dma_dev);
+
+	if (err) {
+		ioat_disable_interrupts(ioat_dma);
+		dma_pool_destroy(ioat_dma->completion_pool);
+	}
+
 	return err;
 }
 
@@ -555,16 +568,15 @@ static void ioat_enumerate_channels(struct ioatdma_device *ioat_dma)
 	struct device *dev = &ioat_dma->pdev->dev;
 	struct dma_device *dma = &ioat_dma->dma_dev;
 	u8 xfercap_log;
-	int chancnt;
 	int i;
 
 	INIT_LIST_HEAD(&dma->channels);
-	chancnt = readb(ioat_dma->reg_base + IOAT_CHANCNT_OFFSET);
-	chancnt &= 0x1f; /* bits [4:0] valid */
-	if (chancnt > ARRAY_SIZE(ioat_dma->idx)) {
+	dma->chancnt = readb(ioat_dma->reg_base + IOAT_CHANCNT_OFFSET);
+	dma->chancnt &= 0x1f; /* bits [4:0] valid */
+	if (dma->chancnt > ARRAY_SIZE(ioat_dma->idx)) {
 		dev_warn(dev, "(%d) exceeds max supported channels (%zu)\n",
-			 chancnt, ARRAY_SIZE(ioat_dma->idx));
-		chancnt = ARRAY_SIZE(ioat_dma->idx);
+			 dma->chancnt, ARRAY_SIZE(ioat_dma->idx));
+		dma->chancnt = ARRAY_SIZE(ioat_dma->idx);
 	}
 	xfercap_log = readb(ioat_dma->reg_base + IOAT_XFERCAP_OFFSET);
 	xfercap_log &= 0x1f; /* bits [4:0] valid */
@@ -572,7 +584,7 @@ static void ioat_enumerate_channels(struct ioatdma_device *ioat_dma)
 		return;
 	dev_dbg(dev, "%s: xfercap = %d\n", __func__, 1 << xfercap_log);
 
-	for (i = 0; i < chancnt; i++) {
+	for (i = 0; i < dma->chancnt; i++) {
 		ioat_chan = kzalloc(sizeof(*ioat_chan), GFP_KERNEL);
 		if (!ioat_chan)
 			break;
@@ -585,7 +597,7 @@ static void ioat_enumerate_channels(struct ioatdma_device *ioat_dma)
 			break;
 		}
 	}
-	ioat_dma->chancnt = i;
+	dma->chancnt = i;
 }
 
 /**
@@ -1169,9 +1181,9 @@ static int ioat3_dma_probe(struct ioatdma_device *ioat_dma, int dca)
 		       ioat_chan->reg_base + IOAT_DCACTRL_OFFSET);
 	}
 
-	err = dma_async_device_register(&ioat_dma->dma_dev);
+	err = ioat_register(ioat_dma);
 	if (err)
-		goto err_disable_interrupts;
+		return err;
 
 	ioat_kobject_add(ioat_dma, &ioat_ktype);
 
@@ -1179,30 +1191,21 @@ static int ioat3_dma_probe(struct ioatdma_device *ioat_dma, int dca)
 		ioat_dma->dca = ioat_dca_init(pdev, ioat_dma->reg_base);
 
 	/* disable relaxed ordering */
-	err = pcie_capability_read_word(pdev, PCI_EXP_DEVCTL, &val16);
-	if (err) {
-		err = pcibios_err_to_errno(err);
-		goto err_disable_interrupts;
-	}
+	err = pcie_capability_read_word(pdev, IOAT_DEVCTRL_OFFSET, &val16);
+	if (err)
+		return pcibios_err_to_errno(err);
 
 	/* clear relaxed ordering enable */
-	val16 &= ~PCI_EXP_DEVCTL_RELAX_EN;
-	err = pcie_capability_write_word(pdev, PCI_EXP_DEVCTL, val16);
-	if (err) {
-		err = pcibios_err_to_errno(err);
-		goto err_disable_interrupts;
-	}
+	val16 &= ~IOAT_DEVCTRL_ROE;
+	err = pcie_capability_write_word(pdev, IOAT_DEVCTRL_OFFSET, val16);
+	if (err)
+		return pcibios_err_to_errno(err);
 
 	if (ioat_dma->cap & IOAT_CAP_DPS)
 		writeb(ioat_pending_level + 1,
 		       ioat_dma->reg_base + IOAT_PREFETCH_LIMIT_OFFSET);
 
 	return 0;
-
-err_disable_interrupts:
-	ioat_disable_interrupts(ioat_dma);
-	dma_pool_destroy(ioat_dma->completion_pool);
-	return err;
 }
 
 static void ioat_shutdown(struct pci_dev *pdev)
@@ -1347,8 +1350,6 @@ static int ioat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	void __iomem * const *iomap;
 	struct device *dev = &pdev->dev;
 	struct ioatdma_device *device;
-	unsigned int i;
-	u8 version;
 	int err;
 
 	err = pcim_enable_device(pdev);
@@ -1362,11 +1363,15 @@ static int ioat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (!iomap)
 		return -ENOMEM;
 
-	version = readb(iomap[IOAT_MMIO_BAR] + IOAT_VER_OFFSET);
-	if (version < IOAT_VER_3_0)
-		return -ENODEV;
+	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(64));
+	if (err)
+		err = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+	if (err)
+		return err;
 
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
+	if (err)
+		err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
 	if (err)
 		return err;
 
@@ -1376,19 +1381,22 @@ static int ioat_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pci_set_master(pdev);
 	pci_set_drvdata(pdev, device);
 
-	device->version = version;
+	device->version = readb(device->reg_base + IOAT_VER_OFFSET);
 	if (device->version >= IOAT_VER_3_4)
 		ioat_dca_enabled = 0;
+	if (device->version >= IOAT_VER_3_0) {
+		if (is_skx_ioat(pdev))
+			device->version = IOAT_VER_3_2;
+		err = ioat3_dma_probe(device, ioat_dca_enabled);
 
-	if (is_skx_ioat(pdev))
-		device->version = IOAT_VER_3_2;
+		if (device->version >= IOAT_VER_3_3)
+			pci_enable_pcie_error_reporting(pdev);
+	} else
+		return -ENODEV;
 
-	err = ioat3_dma_probe(device, ioat_dca_enabled);
 	if (err) {
-		for (i = 0; i < IOAT_MAX_CHANS; i++)
-			kfree(device->idx[i]);
-		kfree(device);
 		dev_err(dev, "Intel(R) I/OAT DMA Engine init failed\n");
+		pci_disable_pcie_error_reporting(pdev);
 		return -ENODEV;
 	}
 
@@ -1411,6 +1419,7 @@ static void ioat_remove(struct pci_dev *pdev)
 		device->dca = NULL;
 	}
 
+	pci_disable_pcie_error_reporting(pdev);
 	ioat_dma_remove(device);
 }
 
@@ -1449,7 +1458,6 @@ module_init(ioat_init_module);
 static void __exit ioat_exit_module(void)
 {
 	pci_unregister_driver(&ioat_pci_driver);
-	kmem_cache_destroy(ioat_sed_cache);
 	kmem_cache_destroy(ioat_cache);
 }
 module_exit(ioat_exit_module);

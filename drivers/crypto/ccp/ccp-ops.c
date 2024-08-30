@@ -179,11 +179,8 @@ static int ccp_init_dm_workarea(struct ccp_dm_workarea *wa,
 
 		wa->dma.address = dma_map_single(wa->dev, wa->address, len,
 						 dir);
-		if (dma_mapping_error(wa->dev, wa->dma.address)) {
-			kfree(wa->address);
-			wa->address = NULL;
+		if (dma_mapping_error(wa->dev, wa->dma.address))
 			return -ENOMEM;
-		}
 
 		wa->dma.length = len;
 	}
@@ -2423,6 +2420,7 @@ static int ccp_run_ecc_pm_cmd(struct ccp_cmd_queue *cmd_q, struct ccp_cmd *cmd)
 	dst.address += CCP_ECC_OUTPUT_SIZE;
 	ccp_reverse_get_dm_area(&dst, 0, ecc->u.pm.result.y, 0,
 				CCP_ECC_MODULUS_BYTES);
+	dst.address += CCP_ECC_OUTPUT_SIZE;
 
 	/* Restore the workarea address */
 	dst.address = save;

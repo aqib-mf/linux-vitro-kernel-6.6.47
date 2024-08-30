@@ -11,6 +11,8 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/interrupt.h>
 #include <linux/power_supply.h>
 #include <linux/notifier.h>
@@ -464,8 +466,10 @@ static int da9150_charger_register_irq(struct platform_device *pdev,
 	int irq, ret;
 
 	irq = platform_get_irq_byname(pdev, irq_name);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(dev, "Failed to get IRQ CHG_STATUS: %d\n", irq);
 		return irq;
+	}
 
 	ret = request_threaded_irq(irq, NULL, handler, IRQF_ONESHOT, irq_name,
 				   charger);
@@ -478,12 +482,15 @@ static int da9150_charger_register_irq(struct platform_device *pdev,
 static void da9150_charger_unregister_irq(struct platform_device *pdev,
 					  const char *irq_name)
 {
+	struct device *dev = &pdev->dev;
 	struct da9150_charger *charger = platform_get_drvdata(pdev);
 	int irq;
 
 	irq = platform_get_irq_byname(pdev, irq_name);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(dev, "Failed to get IRQ CHG_STATUS: %d\n", irq);
 		return;
+	}
 
 	free_irq(irq, charger);
 }
@@ -655,7 +662,6 @@ static int da9150_charger_remove(struct platform_device *pdev)
 
 	if (!IS_ERR_OR_NULL(charger->usb_phy))
 		usb_unregister_notifier(charger->usb_phy, &charger->otg_nb);
-	cancel_work_sync(&charger->otg_work);
 
 	power_supply_unregister(charger->battery);
 	power_supply_unregister(charger->usb);

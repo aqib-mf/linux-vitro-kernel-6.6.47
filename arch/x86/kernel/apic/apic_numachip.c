@@ -56,6 +56,17 @@ static u32 numachip2_set_apic_id(unsigned int id)
 	return id << 24;
 }
 
+static int numachip_apic_id_valid(u32 apicid)
+{
+	/* Trust what bootloader passes in MADT */
+	return 1;
+}
+
+static int numachip_apic_id_registered(void)
+{
+	return 1;
+}
+
 static int numachip_phys_pkg_id(int initial_apic_id, int index_msb)
 {
 	return initial_apic_id >> index_msb;
@@ -217,20 +228,40 @@ static int numachip2_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 	return 1;
 }
 
+/* APIC IPIs are queued */
+static void numachip_apic_wait_icr_idle(void)
+{
+}
+
+/* APIC NMI IPIs are queued */
+static u32 numachip_safe_apic_wait_icr_idle(void)
+{
+	return 0;
+}
+
 static const struct apic apic_numachip1 __refconst = {
 	.name				= "NumaConnect system",
 	.probe				= numachip1_probe,
 	.acpi_madt_oem_check		= numachip1_acpi_madt_oem_check,
+	.apic_id_valid			= numachip_apic_id_valid,
+	.apic_id_registered		= numachip_apic_id_registered,
 
-	.delivery_mode			= APIC_DELIVERY_MODE_FIXED,
-	.dest_mode_logical		= false,
+	.irq_delivery_mode		= dest_Fixed,
+	.irq_dest_mode			= 0, /* physical */
 
 	.disable_esr			= 0,
+	.dest_logical			= 0,
+	.check_apicid_used		= NULL,
 
+	.init_apic_ldr			= flat_init_apic_ldr,
+
+	.ioapic_phys_id_map		= NULL,
+	.setup_apic_routing		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
+	.apicid_to_cpu_present		= NULL,
+	.check_phys_apicid_present	= default_check_phys_apicid_present,
 	.phys_pkg_id			= numachip_phys_pkg_id,
 
-	.max_apic_id			= UINT_MAX,
 	.get_apic_id			= numachip1_get_apic_id,
 	.set_apic_id			= numachip1_set_apic_id,
 
@@ -244,12 +275,15 @@ static const struct apic apic_numachip1 __refconst = {
 	.send_IPI_self			= numachip_send_IPI_self,
 
 	.wakeup_secondary_cpu		= numachip_wakeup_secondary,
+	.inquire_remote_apic		= NULL, /* REMRD not supported */
 
 	.read				= native_apic_mem_read,
 	.write				= native_apic_mem_write,
-	.eoi				= native_apic_mem_eoi,
+	.eoi_write			= native_apic_mem_write,
 	.icr_read			= native_apic_icr_read,
 	.icr_write			= native_apic_icr_write,
+	.wait_icr_idle			= numachip_apic_wait_icr_idle,
+	.safe_wait_icr_idle		= numachip_safe_apic_wait_icr_idle,
 };
 
 apic_driver(apic_numachip1);
@@ -258,16 +292,25 @@ static const struct apic apic_numachip2 __refconst = {
 	.name				= "NumaConnect2 system",
 	.probe				= numachip2_probe,
 	.acpi_madt_oem_check		= numachip2_acpi_madt_oem_check,
+	.apic_id_valid			= numachip_apic_id_valid,
+	.apic_id_registered		= numachip_apic_id_registered,
 
-	.delivery_mode			= APIC_DELIVERY_MODE_FIXED,
-	.dest_mode_logical		= false,
+	.irq_delivery_mode		= dest_Fixed,
+	.irq_dest_mode			= 0, /* physical */
 
 	.disable_esr			= 0,
+	.dest_logical			= 0,
+	.check_apicid_used		= NULL,
 
+	.init_apic_ldr			= flat_init_apic_ldr,
+
+	.ioapic_phys_id_map		= NULL,
+	.setup_apic_routing		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
+	.apicid_to_cpu_present		= NULL,
+	.check_phys_apicid_present	= default_check_phys_apicid_present,
 	.phys_pkg_id			= numachip_phys_pkg_id,
 
-	.max_apic_id			= UINT_MAX,
 	.get_apic_id			= numachip2_get_apic_id,
 	.set_apic_id			= numachip2_set_apic_id,
 
@@ -281,12 +324,15 @@ static const struct apic apic_numachip2 __refconst = {
 	.send_IPI_self			= numachip_send_IPI_self,
 
 	.wakeup_secondary_cpu		= numachip_wakeup_secondary,
+	.inquire_remote_apic		= NULL, /* REMRD not supported */
 
 	.read				= native_apic_mem_read,
 	.write				= native_apic_mem_write,
-	.eoi				= native_apic_mem_eoi,
+	.eoi_write			= native_apic_mem_write,
 	.icr_read			= native_apic_icr_read,
 	.icr_write			= native_apic_icr_write,
+	.wait_icr_idle			= numachip_apic_wait_icr_idle,
+	.safe_wait_icr_idle		= numachip_safe_apic_wait_icr_idle,
 };
 
 apic_driver(apic_numachip2);

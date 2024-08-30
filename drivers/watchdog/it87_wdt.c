@@ -152,6 +152,14 @@ static inline int superio_inw(int reg)
 	return val;
 }
 
+static inline void superio_outw(int val, int reg)
+{
+	outb(reg++, REG);
+	outb(val >> 8, VAL);
+	outb(reg, REG);
+	outb(val, VAL);
+}
+
 /* Internal function, should be called after superio_select(GPIO) */
 static void _wdt_update_timeout(unsigned int t)
 {
@@ -255,7 +263,6 @@ static struct watchdog_device wdt_dev = {
 static int __init it87_wdt_init(void)
 {
 	u8  chip_rev;
-	u8 ctrl;
 	int rc;
 
 	rc = superio_enter();
@@ -314,18 +321,7 @@ static int __init it87_wdt_init(void)
 
 	superio_select(GPIO);
 	superio_outb(WDT_TOV1, WDTCFG);
-
-	switch (chip_type) {
-	case IT8784_ID:
-	case IT8786_ID:
-		ctrl = superio_inb(WDTCTRL);
-		ctrl &= 0x08;
-		superio_outb(ctrl, WDTCTRL);
-		break;
-	default:
-		superio_outb(0x00, WDTCTRL);
-	}
-
+	superio_outb(0x00, WDTCTRL);
 	superio_exit();
 
 	if (timeout < 1 || timeout > max_units * 60) {

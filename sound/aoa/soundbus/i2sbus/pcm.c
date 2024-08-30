@@ -918,8 +918,10 @@ i2sbus_attach_codec(struct soundbus_dev *dev, struct snd_card *card,
 	}
 
 	cii = kzalloc(sizeof(struct codec_info_item), GFP_KERNEL);
-	if (!cii)
+	if (!cii) {
+		printk(KERN_DEBUG "i2sbus: failed to allocate cii\n");
 		return -ENOMEM;
+	}
 
 	/* use the private data to point to the codec info */
 	cii->sdev = soundbus_dev_get(dev);
@@ -972,7 +974,7 @@ i2sbus_attach_codec(struct soundbus_dev *dev, struct snd_card *card,
 			goto out_put_ci_module;
 		snd_pcm_set_ops(dev->pcm, SNDRV_PCM_STREAM_PLAYBACK,
 				&i2sbus_playback_ops);
-		dev->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].dev->parent =
+		dev->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].dev.parent =
 			&dev->ofdev.dev;
 		i2sdev->out.created = 1;
 	}
@@ -989,7 +991,7 @@ i2sbus_attach_codec(struct soundbus_dev *dev, struct snd_card *card,
 			goto out_put_ci_module;
 		snd_pcm_set_ops(dev->pcm, SNDRV_PCM_STREAM_CAPTURE,
 				&i2sbus_record_ops);
-		dev->pcm->streams[SNDRV_PCM_STREAM_CAPTURE].dev->parent =
+		dev->pcm->streams[SNDRV_PCM_STREAM_CAPTURE].dev.parent =
 			&dev->ofdev.dev;
 		i2sdev->in.created = 1;
 	}

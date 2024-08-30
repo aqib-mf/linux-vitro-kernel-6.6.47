@@ -62,6 +62,8 @@ static int chnl_recv_cb(struct cflayer *layr, struct cfpkt *pkt)
 	u8 buf;
 
 	priv = container_of(layr, struct chnl_net, chnl);
+	if (!priv)
+		return -EINVAL;
 
 	skb = (struct sk_buff *) cfpkt_tonative(pkt);
 
@@ -99,7 +101,10 @@ static int chnl_recv_cb(struct cflayer *layr, struct cfpkt *pkt)
 	else
 		skb->ip_summed = CHECKSUM_NONE;
 
-	netif_rx(skb);
+	if (in_interrupt())
+		netif_rx(skb);
+	else
+		netif_rx_ni(skb);
 
 	/* Update statistics. */
 	priv->netdev->stats.rx_packets++;
@@ -310,6 +315,9 @@ static int chnl_net_open(struct net_device *dev)
 
 	if (result == 0) {
 		pr_debug("connect timeout\n");
+		caif_disconnect_client(dev_net(dev), &priv->chnl);
+		priv->state = CAIF_DISCONNECTED;
+		pr_debug("state disconnected\n");
 		result = -ETIMEDOUT;
 		goto error;
 	}

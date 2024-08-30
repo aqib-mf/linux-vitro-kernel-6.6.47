@@ -257,6 +257,7 @@ static void moxart_dma_complete(void *param)
 static void moxart_transfer_dma(struct mmc_data *data, struct moxart_host *host)
 {
 	u32 len, dir_slave;
+	long dma_time;
 	struct dma_async_tx_descriptor *desc = NULL;
 	struct dma_chan *dma_chan;
 
@@ -293,8 +294,8 @@ static void moxart_transfer_dma(struct mmc_data *data, struct moxart_host *host)
 
 	data->bytes_xfered += host->data_remain;
 
-	wait_for_completion_interruptible_timeout(&host->dma_complete,
-						  host->timeout);
+	dma_time = wait_for_completion_interruptible_timeout(
+		   &host->dma_complete, host->timeout);
 
 	dma_unmap_sg(dma_chan->device->dev,
 		     data->sg, data->sg_len,
@@ -338,7 +339,13 @@ static void moxart_transfer_pio(struct moxart_host *host)
 				return;
 			}
 			for (len = 0; len < remain && len < host->fifo_width;) {
-				*sgp = ioread32(host->base + REG_DATA_WINDOW);
+				/* SCR data must be read in big endian. */
+				if (data->mrq->cmd->opcode == SD_APP_SEND_SCR)
+					*sgp = ioread32be(host->base +
+							  REG_DATA_WINDOW);
+				else
+					*sgp = ioread32(host->base +
+							REG_DATA_WINDOW);
 				sgp++;
 				len += 4;
 			}
@@ -388,6 +395,7 @@ static void moxart_prepare_data(struct moxart_host *host)
 static void moxart_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	struct moxart_host *host = mmc_priv(mmc);
+	long pio_time;
 	unsigned long flags;
 	u32 status;
 
@@ -423,8 +431,8 @@ static void moxart_request(struct mmc_host *mmc, struct mmc_request *mrq)
 			spin_unlock_irqrestore(&host->lock, flags);
 
 			/* PIO transfers start from interrupt. */
-			wait_for_completion_interruptible_timeout(&host->pio_complete,
-								  host->timeout);
+			pio_time = wait_for_completion_interruptible_timeout(
+				   &host->pio_complete, host->timeout);
 
 			spin_lock_irqsave(&host->lock, flags);
 		}
@@ -457,8 +465,9 @@ static irqreturn_t moxart_irq(int irq, void *devid)
 {
 	struct moxart_host *host = (struct moxart_host *)devid;
 	u32 status;
+	unsigned long flags;
 
-	spin_lock(&host->lock);
+	spin_lock_irqsave(&host->lock, flags);
 
 	status = readl(host->base + REG_STATUS);
 	if (status & CARD_CHANGE) {
@@ -475,7 +484,7 @@ static irqreturn_t moxart_irq(int irq, void *devid)
 	if (status & (FIFO_ORUN | FIFO_URUN) && host->mrq)
 		moxart_transfer_pio(host);
 
-	spin_unlock(&host->lock);
+	spin_unlock_irqrestore(&host->lock, flags);
 
 	return IRQ_HANDLED;
 }
@@ -605,9 +614,6 @@ static int moxart_probe(struct platform_device *pdev)
 	mmc->f_max = DIV_ROUND_CLOSEST(host->sysclk, 2);
 	mmc->f_min = DIV_ROUND_CLOSEST(host->sysclk, CLK_DIV_MASK * 2);
 	mmc->ocr_avail = 0xffff00;	/* Support 2.0v - 3.6v power. */
-	mmc->max_blk_size = 2048; /* Max. block length in REG_DATA_CONTROL */
-	mmc->max_req_size = DATA_LEN_MASK; /* bits 0-23 in REG_DATA_LENGTH */
-	mmc->max_blk_count = mmc->max_req_size / 512;
 
 	if (IS_ERR(host->dma_chan_tx) || IS_ERR(host->dma_chan_rx)) {
 		if (PTR_ERR(host->dma_chan_tx) == -EPROBE_DEFER ||
@@ -625,8 +631,6 @@ static int moxart_probe(struct platform_device *pdev)
 		}
 		dev_dbg(dev, "PIO mode transfer enabled\n");
 		host->have_dma = false;
-
-		mmc->max_seg_size = mmc->max_req_size;
 	} else {
 		dev_dbg(dev, "DMA channels found (%p,%p)\n",
 			 host->dma_chan_tx, host->dma_chan_rx);
@@ -645,10 +649,6 @@ static int moxart_probe(struct platform_device *pdev)
 		cfg.src_addr = host->reg_phys + REG_DATA_WINDOW;
 		cfg.dst_addr = 0;
 		dmaengine_slave_config(host->dma_chan_rx, &cfg);
-
-		mmc->max_seg_size = min3(mmc->max_req_size,
-			dma_get_max_seg_size(host->dma_chan_rx->device->dev),
-			dma_get_max_seg_size(host->dma_chan_tx->device->dev));
 	}
 
 	if (readl(host->base + REG_BUS_WIDTH) & BUS_WIDTH_4_SUPPORT)
@@ -668,9 +668,7 @@ static int moxart_probe(struct platform_device *pdev)
 		goto out;
 
 	dev_set_drvdata(dev, mmc);
-	ret = mmc_add_host(mmc);
-	if (ret)
-		goto out;
+	mmc_add_host(mmc);
 
 	dev_dbg(dev, "IRQ=%d, FIFO is %d bytes\n", irq, host->fifo_width);
 
@@ -687,10 +685,12 @@ out_mmc:
 	return ret;
 }
 
-static void moxart_remove(struct platform_device *pdev)
+static int moxart_remove(struct platform_device *pdev)
 {
 	struct mmc_host *mmc = dev_get_drvdata(&pdev->dev);
 	struct moxart_host *host = mmc_priv(mmc);
+
+	dev_set_drvdata(&pdev->dev, NULL);
 
 	if (!IS_ERR_OR_NULL(host->dma_chan_tx))
 		dma_release_channel(host->dma_chan_tx);
@@ -703,6 +703,8 @@ static void moxart_remove(struct platform_device *pdev)
 	writel(readl(host->base + REG_CLOCK_CONTROL) | CLK_OFF,
 	       host->base + REG_CLOCK_CONTROL);
 	mmc_free_host(mmc);
+
+	return 0;
 }
 
 static const struct of_device_id moxart_mmc_match[] = {
@@ -714,7 +716,7 @@ MODULE_DEVICE_TABLE(of, moxart_mmc_match);
 
 static struct platform_driver moxart_mmc_driver = {
 	.probe      = moxart_probe,
-	.remove_new = moxart_remove,
+	.remove     = moxart_remove,
 	.driver     = {
 		.name		= "mmc-moxart",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,

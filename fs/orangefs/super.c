@@ -11,7 +11,6 @@
 
 #include <linux/parser.h>
 #include <linux/hashtable.h>
-#include <linux/seq_file.h>
 
 /* a cache for orangefs-inode objects (i.e. orangefs inode private data) */
 static struct kmem_cache *orangefs_inode_cache;
@@ -107,7 +106,7 @@ static struct inode *orangefs_alloc_inode(struct super_block *sb)
 {
 	struct orangefs_inode_s *orangefs_inode;
 
-	orangefs_inode = alloc_inode_sb(sb, orangefs_inode_cache, GFP_KERNEL);
+	orangefs_inode = kmem_cache_alloc(orangefs_inode_cache, GFP_KERNEL);
 	if (!orangefs_inode)
 		return NULL;
 
@@ -201,8 +200,7 @@ static int orangefs_statfs(struct dentry *dentry, struct kstatfs *buf)
 		     (long)new_op->downcall.resp.statfs.files_avail);
 
 	buf->f_type = sb->s_magic;
-	buf->f_fsid.val[0] = ORANGEFS_SB(sb)->fs_id;
-	buf->f_fsid.val[1] = ORANGEFS_SB(sb)->id;
+	memcpy(&buf->f_fsid, &ORANGEFS_SB(sb)->fs_id, sizeof(buf->f_fsid));
 	buf->f_bsize = new_op->downcall.resp.statfs.block_size;
 	buf->f_namelen = ORANGEFS_NAME_MAX;
 
@@ -477,7 +475,7 @@ struct dentry *orangefs_mount(struct file_system_type *fst,
 			   const char *devname,
 			   void *data)
 {
-	int ret;
+	int ret = -EINVAL;
 	struct super_block *sb = ERR_PTR(-EINVAL);
 	struct orangefs_kernel_op_s *new_op;
 	struct dentry *d = ERR_PTR(-EINVAL);

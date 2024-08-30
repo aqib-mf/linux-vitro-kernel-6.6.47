@@ -8,9 +8,10 @@
 #include <linux/bitops.h>
 #include <linux/gpio/driver.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/of_device.h>
+#include <linux/of_gpio.h>
 #include <linux/seq_file.h>
 #include <linux/spi/spi.h>
 #include <linux/regmap.h>
@@ -185,7 +186,15 @@ static int xra1403_probe(struct spi_device *spi)
 		return ret;
 	}
 
-	return devm_gpiochip_add_data(&spi->dev, &xra->chip, xra);
+	ret = devm_gpiochip_add_data(&spi->dev, &xra->chip, xra);
+	if (ret < 0) {
+		dev_err(&spi->dev, "Unable to register gpiochip\n");
+		return ret;
+	}
+
+	spi_set_drvdata(spi, xra);
+
+	return 0;
 }
 
 static const struct spi_device_id xra1403_ids[] = {
@@ -205,7 +214,7 @@ static struct spi_driver xra1403_driver = {
 	.id_table = xra1403_ids,
 	.driver   = {
 		.name           = "xra1403",
-		.of_match_table = xra1403_spi_of_match,
+		.of_match_table = of_match_ptr(xra1403_spi_of_match),
 	},
 };
 

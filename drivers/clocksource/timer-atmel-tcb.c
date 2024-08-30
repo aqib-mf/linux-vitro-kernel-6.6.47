@@ -315,7 +315,6 @@ static void __init tcb_setup_dual_chan(struct atmel_tc *tc, int mck_divisor_idx)
 	writel(mck_divisor_idx			/* likely divide-by-8 */
 			| ATMEL_TC_WAVE
 			| ATMEL_TC_WAVESEL_UP		/* free-run */
-			| ATMEL_TC_ASWTRG_SET		/* TIOA0 rises at software trigger */
 			| ATMEL_TC_ACPA_SET		/* TIOA0 rises at 0 */
 			| ATMEL_TC_ACPC_CLEAR,		/* (duty cycle 50%) */
 			tcaddr + ATMEL_TC_REG(0, CMR));
@@ -456,9 +455,9 @@ static int __init tcb_clksrc_init(struct device_node *node)
 	tcaddr = tc.regs;
 
 	if (bits == 32) {
-		/* use appropriate function to read 32 bit counter */
+		/* use apropriate function to read 32 bit counter */
 		clksrc.read = tc_get_cycles32;
-		/* setup only channel 0 */
+		/* setup ony channel 0 */
 		tcb_setup_single_chan(&tc, best_divisor_idx);
 		tc_sched_clock = tc_sched_clock_read32;
 		tc_delay_timer.read_current_timer = tc_delay_timer_read32;

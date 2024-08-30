@@ -66,12 +66,18 @@ static int physmap_flash_remove(struct platform_device *dev)
 {
 	struct physmap_flash_info *info;
 	struct physmap_flash_data *physmap_data;
-	int i;
+	int i, err = 0;
 
 	info = platform_get_drvdata(dev);
+	if (!info) {
+		err = -EINVAL;
+		goto out;
+	}
 
 	if (info->cmtd) {
-		WARN_ON(mtd_device_unregister(info->cmtd));
+		err = mtd_device_unregister(info->cmtd);
+		if (err)
+			goto out;
 
 		if (info->cmtd != info->mtds[0])
 			mtd_concat_destroy(info->cmtd);
@@ -86,9 +92,10 @@ static int physmap_flash_remove(struct platform_device *dev)
 	if (physmap_data && physmap_data->exit)
 		physmap_data->exit(dev);
 
+out:
 	pm_runtime_put(&dev->dev);
 	pm_runtime_disable(&dev->dev);
-	return 0;
+	return err;
 }
 
 static void physmap_set_vpp(struct map_info *map, int state)
@@ -300,9 +307,6 @@ static const char *of_select_probe_type(struct platform_device *dev)
 	const char *probe_type;
 
 	match = of_match_device(of_flash_match, &dev->dev);
-	if (!match)
-		return NULL;
-
 	probe_type = match->data;
 	if (probe_type)
 		return probe_type;
@@ -508,7 +512,8 @@ static int physmap_flash_probe(struct platform_device *dev)
 	for (i = 0; i < info->nmaps; i++) {
 		struct resource *res;
 
-		info->maps[i].virt = devm_platform_get_and_ioremap_resource(dev, i, &res);
+		res = platform_get_resource(dev, IORESOURCE_MEM, i);
+		info->maps[i].virt = devm_ioremap_resource(&dev->dev, res);
 		if (IS_ERR(info->maps[i].virt)) {
 			err = PTR_ERR(info->maps[i].virt);
 			goto err_out;
@@ -523,7 +528,7 @@ static int physmap_flash_probe(struct platform_device *dev)
 		if (!info->maps[i].phys)
 			info->maps[i].phys = res->start;
 
-		info->win_order = fls64(resource_size(res)) - 1;
+		info->win_order = get_bitmask_order(resource_size(res)) - 1;
 		info->maps[i].size = BIT(info->win_order +
 					 (info->gpios ?
 					  info->gpios->ndescs : 0));
@@ -551,17 +556,6 @@ static int physmap_flash_probe(struct platform_device *dev)
 		if (info->probe_type) {
 			info->mtds[i] = do_map_probe(info->probe_type,
 						     &info->maps[i]);
-
-			/* Fall back to mapping region as ROM */
-			if (!info->mtds[i] && IS_ENABLED(CONFIG_MTD_ROM) &&
-			    strcmp(info->probe_type, "map_rom")) {
-				dev_warn(&dev->dev,
-					 "map_probe() failed for type %s\n",
-					 info->probe_type);
-
-				info->mtds[i] = do_map_probe("map_rom",
-							     &info->maps[i]);
-			}
 		} else {
 			int j;
 

@@ -14,8 +14,8 @@
  */
 
 #include <linux/platform_device.h>
-#include <linux/of.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/of_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/clk.h>
@@ -31,7 +31,7 @@
 #include "cedrus_hw.h"
 #include "cedrus_regs.h"
 
-int cedrus_engine_enable(struct cedrus_ctx *ctx)
+int cedrus_engine_enable(struct cedrus_ctx *ctx, enum cedrus_codec codec)
 {
 	u32 reg = 0;
 
@@ -42,18 +42,16 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 	reg |= VE_MODE_REC_WR_MODE_2MB;
 	reg |= VE_MODE_DDR_MODE_BW_128;
 
-	switch (ctx->src_fmt.pixelformat) {
-	case V4L2_PIX_FMT_MPEG2_SLICE:
+	switch (codec) {
+	case CEDRUS_CODEC_MPEG2:
 		reg |= VE_MODE_DEC_MPEG;
 		break;
 
-	/* H.264 and VP8 both use the same decoding mode bit. */
-	case V4L2_PIX_FMT_H264_SLICE:
-	case V4L2_PIX_FMT_VP8_FRAME:
+	case CEDRUS_CODEC_H264:
 		reg |= VE_MODE_DEC_H264;
 		break;
 
-	case V4L2_PIX_FMT_HEVC_SLICE:
+	case CEDRUS_CODEC_H265:
 		reg |= VE_MODE_DEC_H265;
 		break;
 
@@ -99,7 +97,7 @@ void cedrus_dst_format_set(struct cedrus_dev *dev,
 		cedrus_write(dev, VE_PRIMARY_FB_LINE_STRIDE, reg);
 
 		break;
-	case V4L2_PIX_FMT_NV12_32L32:
+	case V4L2_PIX_FMT_SUNXI_TILED_NV12:
 	default:
 		reg = VE_PRIMARY_OUT_FMT_TILED_32_NV12;
 		cedrus_write(dev, VE_PRIMARY_OUT_FMT, reg);
@@ -118,13 +116,6 @@ static irqreturn_t cedrus_irq(int irq, void *data)
 	enum vb2_buffer_state state;
 	enum cedrus_irq_status status;
 
-	/*
-	 * If cancel_delayed_work returns false it means watchdog already
-	 * executed and finished the job.
-	 */
-	if (!cancel_delayed_work(&dev->watchdog_work))
-		return IRQ_HANDLED;
-
 	ctx = v4l2_m2m_get_curr_priv(dev->m2m_dev);
 	if (!ctx) {
 		v4l2_err(&dev->v4l2_dev,
@@ -132,12 +123,12 @@ static irqreturn_t cedrus_irq(int irq, void *data)
 		return IRQ_NONE;
 	}
 
-	status = ctx->current_codec->irq_status(ctx);
+	status = dev->dec_ops[ctx->current_codec]->irq_status(ctx);
 	if (status == CEDRUS_IRQ_NONE)
 		return IRQ_NONE;
 
-	ctx->current_codec->irq_disable(ctx);
-	ctx->current_codec->irq_clear(ctx);
+	dev->dec_ops[ctx->current_codec]->irq_disable(ctx);
+	dev->dec_ops[ctx->current_codec]->irq_clear(ctx);
 
 	if (status == CEDRUS_IRQ_ERROR)
 		state = VB2_BUF_STATE_ERROR;
@@ -150,33 +141,15 @@ static irqreturn_t cedrus_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-void cedrus_watchdog(struct work_struct *work)
-{
-	struct cedrus_dev *dev;
-	struct cedrus_ctx *ctx;
-
-	dev = container_of(to_delayed_work(work),
-			   struct cedrus_dev, watchdog_work);
-
-	ctx = v4l2_m2m_get_curr_priv(dev->m2m_dev);
-	if (!ctx)
-		return;
-
-	v4l2_err(&dev->v4l2_dev, "frame processing timed out!\n");
-	reset_control_reset(dev->rstc);
-	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
-					 VB2_BUF_STATE_ERROR);
-}
-
 int cedrus_hw_suspend(struct device *device)
 {
 	struct cedrus_dev *dev = dev_get_drvdata(device);
 
+	reset_control_assert(dev->rstc);
+
 	clk_disable_unprepare(dev->ram_clk);
 	clk_disable_unprepare(dev->mod_clk);
 	clk_disable_unprepare(dev->ahb_clk);
-
-	reset_control_assert(dev->rstc);
 
 	return 0;
 }
@@ -186,18 +159,11 @@ int cedrus_hw_resume(struct device *device)
 	struct cedrus_dev *dev = dev_get_drvdata(device);
 	int ret;
 
-	ret = reset_control_reset(dev->rstc);
-	if (ret) {
-		dev_err(dev->dev, "Failed to apply reset\n");
-
-		return ret;
-	}
-
 	ret = clk_prepare_enable(dev->ahb_clk);
 	if (ret) {
 		dev_err(dev->dev, "Failed to enable AHB clock\n");
 
-		goto err_rst;
+		return ret;
 	}
 
 	ret = clk_prepare_enable(dev->mod_clk);
@@ -214,14 +180,21 @@ int cedrus_hw_resume(struct device *device)
 		goto err_mod_clk;
 	}
 
+	ret = reset_control_reset(dev->rstc);
+	if (ret) {
+		dev_err(dev->dev, "Failed to apply reset\n");
+
+		goto err_ram_clk;
+	}
+
 	return 0;
 
+err_ram_clk:
+	clk_disable_unprepare(dev->ram_clk);
 err_mod_clk:
 	clk_disable_unprepare(dev->mod_clk);
 err_ahb_clk:
 	clk_disable_unprepare(dev->ahb_clk);
-err_rst:
-	reset_control_assert(dev->rstc);
 
 	return ret;
 }
@@ -248,6 +221,24 @@ int cedrus_hw_probe(struct cedrus_dev *dev)
 
 		return ret;
 	}
+
+	/*
+	 * The VPU is only able to handle bus addresses so we have to subtract
+	 * the RAM offset to the physcal addresses.
+	 *
+	 * This information will eventually be obtained from device-tree.
+	 *
+	 * XXX(hch): this has no business in a driver and needs to move
+	 * to the device tree.
+	 */
+
+#ifdef PHYS_PFN_OFFSET
+	if (!(variant->quirks & CEDRUS_QUIRK_NO_DMA_OFFSET)) {
+		ret = dma_direct_set_offset(dev->dev, PHYS_OFFSET, 0, SZ_4G);
+		if (ret)
+			return ret;
+	}
+#endif
 
 	ret = of_reserved_mem_device_init(dev->dev);
 	if (ret && ret != -ENODEV) {

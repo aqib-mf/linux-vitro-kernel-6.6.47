@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2005-2007 Red Hat GmbH
  *
@@ -21,8 +20,8 @@
 struct delay_class {
 	struct dm_dev *dev;
 	sector_t start;
-	unsigned int delay;
-	unsigned int ops;
+	unsigned delay;
+	unsigned ops;
 };
 
 struct delay_c {
@@ -31,7 +30,7 @@ struct delay_c {
 	struct workqueue_struct *kdelayd_wq;
 	struct work_struct flush_expired_bios;
 	struct list_head delayed_bios;
-	bool may_delay;
+	atomic_t may_delay;
 
 	struct delay_class read;
 	struct delay_class write;
@@ -73,7 +72,7 @@ static void flush_bios(struct bio *bio)
 	while (bio) {
 		n = bio->bi_next;
 		bio->bi_next = NULL;
-		dm_submit_bio_remap(bio, NULL);
+		submit_bio_noacct(bio);
 		bio = n;
 	}
 }
@@ -192,7 +191,7 @@ static int delay_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	INIT_WORK(&dc->flush_expired_bios, flush_expired_bios);
 	INIT_LIST_HEAD(&dc->delayed_bios);
 	mutex_init(&dc->timer_lock);
-	dc->may_delay = true;
+	atomic_set(&dc->may_delay, 1);
 	dc->argc = argc;
 
 	ret = delay_class_ctr(ti, &dc->read, argv);
@@ -233,7 +232,6 @@ out:
 
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
-	ti->accounts_remapped_io = true;
 	ti->per_io_data_size = sizeof(struct dm_delay_info);
 	return 0;
 
@@ -247,7 +245,7 @@ static int delay_bio(struct delay_c *dc, struct delay_class *c, struct bio *bio)
 	struct dm_delay_info *delayed;
 	unsigned long expires = 0;
 
-	if (!c->delay)
+	if (!c->delay || !atomic_read(&dc->may_delay))
 		return DM_MAPIO_REMAPPED;
 
 	delayed = dm_per_bio_data(bio, sizeof(struct dm_delay_info));
@@ -256,10 +254,6 @@ static int delay_bio(struct delay_c *dc, struct delay_class *c, struct bio *bio)
 	delayed->expires = expires = jiffies + msecs_to_jiffies(c->delay);
 
 	mutex_lock(&delayed_bios_lock);
-	if (unlikely(!dc->may_delay)) {
-		mutex_unlock(&delayed_bios_lock);
-		return DM_MAPIO_REMAPPED;
-	}
 	c->ops++;
 	list_add_tail(&delayed->list, &dc->delayed_bios);
 	mutex_unlock(&delayed_bios_lock);
@@ -273,10 +267,7 @@ static void delay_presuspend(struct dm_target *ti)
 {
 	struct delay_c *dc = ti->private;
 
-	mutex_lock(&delayed_bios_lock);
-	dc->may_delay = false;
-	mutex_unlock(&delayed_bios_lock);
-
+	atomic_set(&dc->may_delay, 0);
 	del_timer_sync(&dc->delay_timer);
 	flush_bios(flush_delayed_bios(dc, 1));
 }
@@ -285,7 +276,7 @@ static void delay_resume(struct dm_target *ti)
 {
 	struct delay_c *dc = ti->private;
 
-	dc->may_delay = true;
+	atomic_set(&dc->may_delay, 1);
 }
 
 static int delay_map(struct dm_target *ti, struct bio *bio)
@@ -304,7 +295,8 @@ static int delay_map(struct dm_target *ti, struct bio *bio)
 	}
 	delayed->class = c;
 	bio_set_dev(bio, c->dev->bdev);
-	bio->bi_iter.bi_sector = c->start + dm_target_offset(ti, bio->bi_iter.bi_sector);
+	if (bio_sectors(bio))
+		bio->bi_iter.bi_sector = c->start + dm_target_offset(ti, bio->bi_iter.bi_sector);
 
 	return delay_bio(dc, c, bio);
 }
@@ -313,7 +305,7 @@ static int delay_map(struct dm_target *ti, struct bio *bio)
 	DMEMIT("%s %llu %u", (c)->dev->name, (unsigned long long)(c)->start, (c)->delay)
 
 static void delay_status(struct dm_target *ti, status_type_t type,
-			 unsigned int status_flags, char *result, unsigned int maxlen)
+			 unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct delay_c *dc = ti->private;
 	int sz = 0;
@@ -333,10 +325,6 @@ static void delay_status(struct dm_target *ti, status_type_t type,
 			DMEMIT(" ");
 			DMEMIT_DELAY_CLASS(&dc->flush);
 		}
-		break;
-
-	case STATUSTYPE_IMA:
-		*result = '\0';
 		break;
 	}
 }
@@ -363,7 +351,7 @@ out:
 
 static struct target_type delay_target = {
 	.name	     = "delay",
-	.version     = {1, 3, 0},
+	.version     = {1, 2, 1},
 	.features    = DM_TARGET_PASSES_INTEGRITY,
 	.module      = THIS_MODULE,
 	.ctr	     = delay_ctr,
@@ -374,7 +362,31 @@ static struct target_type delay_target = {
 	.status	     = delay_status,
 	.iterate_devices = delay_iterate_devices,
 };
-module_dm(delay);
+
+static int __init dm_delay_init(void)
+{
+	int r;
+
+	r = dm_register_target(&delay_target);
+	if (r < 0) {
+		DMERR("register failed %d", r);
+		goto bad_register;
+	}
+
+	return 0;
+
+bad_register:
+	return r;
+}
+
+static void __exit dm_delay_exit(void)
+{
+	dm_unregister_target(&delay_target);
+}
+
+/* Module hooks */
+module_init(dm_delay_init);
+module_exit(dm_delay_exit);
 
 MODULE_DESCRIPTION(DM_NAME " delay target");
 MODULE_AUTHOR("Heinz Mauelshagen <mauelshagen@redhat.com>");
